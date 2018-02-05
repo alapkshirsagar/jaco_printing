@@ -12,6 +12,7 @@ find_package(catkin REQUIRED COMPONENTS
   pluginlib
   cmake_modules
   geometric_shapes
+  message_generation
 )
 
 find_package(Boost REQUIRED system filesystem date_time thread)
@@ -23,7 +24,15 @@ find_package(kinova_driver REQUIRED)
 ################################################
 ## Declare ROS messages, services and actions ##
 ################################################
+add_service_files(
+  FILES
+  AddTwoInts.srv
+)
 
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+)
 
 ################################################
 ## Declare ROS dynamic reconfigure parameters ##

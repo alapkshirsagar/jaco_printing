@@ -5,6 +5,7 @@ import rospy
 from kinova_msgs.srv import *
 from kinova_msgs.msg import *
 from std_msgs.msg import String
+from jaco_printing.srv import *
 
 """ Global variable """
 currentCartesianCommand = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home in unit mq
@@ -48,9 +49,18 @@ def setcurrentCartesianCommand(feedback):
     # print 'currentCartesianCommand in setcurrentCartesianCommand is: ', currentCartesianCommand
 
 def windowsSubscriber():
-    topic_address = '/chatter'
-    rospy.Subscriber(topic_address,String,call_trajectory_client)
+    topic_address = '/chatter_response'
+    rospy.Subscriber(topic_address,String,windowsPublisher)
     rospy.spin()
+
+def windowsPublisher():
+        pub = rospy.Publisher('/chatter', String, queue_size=10)
+        rate = rospy.Rate(10) # 10hz
+        while not rospy.is_shutdown():
+            hello_str = "hello world %s" % rospy.get_time()
+            rospy.loginfo(hello_str)
+            pub.publish(hello_str)
+            rate.sleep()
 
 def call_trajectory_client(feedback):
     fields = feedback.data.split(',')
@@ -64,16 +74,29 @@ def call_trajectory_client(feedback):
     add_pose_to_Cartesian_trajectory_client(targetPose)
 
 
+def handle_add_two_ints(req):
+    print "Returning response"
+    return AddTwoIntsResponse("Receieved %s" %req.a)
+
+def add_two_ints_server():
+    s = rospy.Service('add_two_ints', AddTwoInts, handle_add_two_ints)
+    print "Ready to add two ints."
+    rospy.spin()
 
 if __name__ == "__main__":
     rospy.init_node('trajectory_service_client')
+    #add_two_ints_server()
+
     #getcurrentCartesianCommand()
     #print currentCartesianCommand
 
     #print "Requesting to clear trajectories"
     #clear_trajectories_client()
+    try:
+        windowsPublisher()
+        #windowsSubscriber()
 
-    windowsSubscriber()
+
     # targetPose = KinovaPose()
     # file = open('poses.txt')
     # for line in file:
@@ -96,3 +119,5 @@ if __name__ == "__main__":
     # targetPose.ThetaZ = 0.13
     # print "Requesting to add point to trajectory"
     # add_pose_to_Cartesian_trajectory_client(targetPose)
+    except rospy.ROSInterruptException:
+        pass
