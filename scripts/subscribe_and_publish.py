@@ -8,7 +8,7 @@ from kinova_msgs.msg import *
 class subscribeAndPublish():
     def __init__(self):
         """ Global variable """
-        self.currentCartesianCommand = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home in unit mq
+        self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home in unit mq
 
         #Topic for publishing
         self.pub = rospy.Publisher('/command_response', String, queue_size=10)
@@ -18,21 +18,21 @@ class subscribeAndPublish():
 
         #Target pose for commanding the robot
         self.targetPose = KinovaPose()
-        self.targetPose.X = self.currentCartesianCommand[0]
-        self.targetPose.Y = self.currentCartesianCommand[1]
-        self.targetPose.Z = self.currentCartesianCommand[2]
-        self.targetPose.ThetaX = self.currentCartesianCommand[3]
-        self.targetPose.ThetaY = self.currentCartesianCommand[4]
-        self.targetPose.ThetaZ = self.currentCartesianCommand[5]
+        self.targetPose.X = self.homePosition[0]
+        self.targetPose.Y = self.homePosition[1]
+        self.targetPose.Z = self.homePosition[2]
+        self.targetPose.ThetaX = self.homePosition[3]
+        self.targetPose.ThetaY = self.homePosition[4]
+        self.targetPose.ThetaZ = self.homePosition[5]
 
     #Send the target position to add_pose_to_Cartesian_trajectory. The fields are: 0:NA, 1-9: Rotation Matrix, 10-12: Position, 13: Extrusion, 14: Cooling, 15:Pause, 16: Speed, 17: TypeOfCurve
     def callback(self, message):
         print 'Receieved:%s'%message.data
         fields = message.data.split(',')
         if len(fields) == 18:
-            self.targetPose.X = fields[10]
-            self.targetPose.Y = fields[11]
-            self.targetPose.Z = fields[12]
+            self.targetPose.X = self.homePosition[0]+float(fields[1])/1000
+            self.targetPose.Y = self.homePosition[1]+float(fields[2])/1000
+            self.targetPose.Z = self.homePosition[2]-float(fields[3])/1000
             pause = fields[15]
 
             #Add targetPose to robot trajectory using the service
@@ -40,7 +40,7 @@ class subscribeAndPublish():
             self.addPoseToCartesianTrajectoryClient(self.targetPose)
 
             #Pause robot
-            rospy.sleep(rospy.Duration(int(pause),0))
+            #rospy.sleep(rospy.Duration(int(pause),0))
 
         self.pub.publish('Motion.\r')
 
