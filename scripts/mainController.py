@@ -5,18 +5,13 @@ from std_msgs.msg import String
 from kinova_msgs.srv import *
 from kinova_msgs.msg import *
 
-class subscribeAndPublish():
+## Class to communicate between all components: Rhino Plugin, Jaco2, Arduino
+class mainController():
     def __init__(self):
         """ Global variable """
-        self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home in unit mq
+        self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit mq
 
-        #Topic for publishing
-        self.pub = rospy.Publisher('/command_response', String, queue_size=10)
-
-        #Topic for subscribing
-        self.sub = rospy.Subscriber('/command',String, self.callback)
-
-        #Target pose for commanding the robot
+        # Target pose for commanding the robot
         self.targetPose = KinovaPose()
         self.targetPose.X = self.homePosition[0]
         self.targetPose.Y = self.homePosition[1]
@@ -24,20 +19,43 @@ class subscribeAndPublish():
         self.targetPose.ThetaX = self.homePosition[3]
         self.targetPose.ThetaY = self.homePosition[4]
         self.targetPose.ThetaZ = self.homePosition[5]
-        self.receivedCounter = 0
-        self.sentCounter = 0
 
+        self.receivedCounter = 0 #Keep count of messages received from RhinoPlugin
+        self.sentCounter = 0 #Keep count of responses sent to RhinoPlugin
+        self.extruderTemperature = 0 #Temperature of extruder TODO Unit and Initial Value?
+
+
+############# Publishers #######################################################
+        #Topic for sending response to RhinoPlugin
+        self.rhinoPub = rospy.Publisher('/command_response', String, queue_size=10)
+
+        #Topic for sending commands to Arduino
+        self.arduinoPub = rospy.Publisher('/extruder', String, queue_size=10)
+
+
+############ Subscribers ######################################################
+        #Topic for getting commands from RhinoPlugin
+        rospy.Subscriber('/command',String, self.getRhinoCommands)
+
+        #Topic for getting response from Arduino
+        rospy.Subscriber('/chatter',String, self.getArduinoResponse)
+
+########### Services ##########################################################
         #Service for sending trajectory points to the robot
         self.addPoseToCartesianTrajectory = rospy.ServiceProxy('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory', AddPoseToCartesianTrajectory)
 
-
+###############################################################################
 
     #Send the target position to add_pose_to_Cartesian_trajectory. The fields are: 0:NA, 1-9: Rotation Matrix, 10-12: Position, 13: Extrusion, 14: Cooling, 15:Pause, 16: Speed, 17: TypeOfCurve
-    def callback(self, message):
+    def getRhinoCommands(self, message):
         self.receivedCounter = self.receivedCounter+1
         print 'Received Counter:%i'%self.receivedCounter
         fields = message.data.split(',')
         if len(fields) == 10:
+            # Send extruder commands to arduino
+            self.arduinoPub.publish("G1 E"+fields[13])
+
+            # Send motion commands to robot
             self.targetPose.X = self.homePosition[0]+float(fields[1])/1000
             self.targetPose.Y = self.homePosition[1]+float(fields[2])/1000
             self.targetPose.Z = self.homePosition[2]+float(fields[3])/1000
@@ -60,23 +78,32 @@ class subscribeAndPublish():
             print "Pausing for"
             print rospy.Duration(int(pause),0)
             rospy.sleep(rospy.Duration(int(pause),0))
-            self.pub.publish('Motion.\r')
+            self.rhinoPub.publish('Motion.\r')
             self.sentCounter = self.sentCounter+1
             print 'Sent Counter:%i'%self.sentCounter
             return resp1
         except rospy.ServiceException, e:
             print "Service call failed: %s"%e
 
+    def getArduinoResponse(self,message):
+        #TODO Update temperature of extruder
+        print message
+
+    def heatExtruder(self):
+        self.arduinoPub.publish("M104 S270")
+        #TODO wait till temperature reaches 270
+
 
 if __name__ =='__main__':
     #Initialize node
-    rospy.init_node('SubscribeAndPublish')
+    rospy.init_node('mainController')
     print 'Waiting for the server...'
     rospy.wait_for_service('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory')
     print 'Server Connected'
 
     try:
-        subPub = subscribeAndPublish()
+        brain = mainController()
+        brain.heatExtruder()
         rospy.spin()
 
     except rospy.ROSInterruptException:
