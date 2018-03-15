@@ -24,33 +24,45 @@ class subscribeAndPublish():
         self.targetPose.ThetaX = self.homePosition[3]
         self.targetPose.ThetaY = self.homePosition[4]
         self.targetPose.ThetaZ = self.homePosition[5]
+        self.receivedCounter = 0
+        self.sentCounter = 0
+
+        #Service for sending trajectory points to the robot
+        self.addPoseToCartesianTrajectory = rospy.ServiceProxy('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory', AddPoseToCartesianTrajectory)
+
+
 
     #Send the target position to add_pose_to_Cartesian_trajectory. The fields are: 0:NA, 1-9: Rotation Matrix, 10-12: Position, 13: Extrusion, 14: Cooling, 15:Pause, 16: Speed, 17: TypeOfCurve
     def callback(self, message):
-        print 'Receieved:%s'%message.data
+        self.receivedCounter = self.receivedCounter+1
+        print 'Received Counter:%i'%self.receivedCounter
         fields = message.data.split(',')
-        if len(fields) == 18:
+        if len(fields) == 10:
             self.targetPose.X = self.homePosition[0]+float(fields[1])/1000
             self.targetPose.Y = self.homePosition[1]+float(fields[2])/1000
-            self.targetPose.Z = self.homePosition[2]-float(fields[3])/1000
-            pause = fields[15]
+            self.targetPose.Z = self.homePosition[2]+float(fields[3])/1000
+            self.targetPose.ThetaX = float(fields[4])*3.14/180
+            self.targetPose.ThetaY = float(fields[5])*3.14/180
+            self.targetPose.ThetaZ = float(fields[6])*3.14/180
+            pause = fields[7]
+            MaxTranslationVelocity = 0.05
 
             #Add targetPose to robot trajectory using the service
-            print 'Requesting add_pose_to_Cartesian_trajectory service'
-            self.addPoseToCartesianTrajectoryClient(self.targetPose)
+            #print 'Requesting add_pose_to_Cartesian_trajectory service'
+            self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,pause)
 
-            #Pause robot
-            #rospy.sleep(rospy.Duration(int(pause),0))
 
-        self.pub.publish('Motion.\r')
-
-    def addPoseToCartesianTrajectoryClient(self,targetPose):
-        print 'Waiting for the server...'
-        rospy.wait_for_service('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory')
+    def addPoseToCartesianTrajectoryClient(self,targetPose,MaxTranslationVelocity,pause):
         try:
-            addPoseToCartesianTrajectory = rospy.ServiceProxy('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory', AddPoseToCartesianTrajectory)
-            resp1 = addPoseToCartesianTrajectory(targetPose.X,targetPose.Y,targetPose.Z,targetPose.ThetaX,targetPose.ThetaY,targetPose.ThetaZ)
-            print resp1
+            resp1 = self.addPoseToCartesianTrajectory(targetPose.X,targetPose.Y,targetPose.Z,targetPose.ThetaX,targetPose.ThetaY,targetPose.ThetaZ,MaxTranslationVelocity)
+            #print resp1
+            #Pause robot
+            print "Pausing for"
+            print rospy.Duration(int(pause),0)
+            rospy.sleep(rospy.Duration(int(pause),0))
+            self.pub.publish('Motion.\r')
+            self.sentCounter = self.sentCounter+1
+            print 'Sent Counter:%i'%self.sentCounter
             return resp1
         except rospy.ServiceException, e:
             print "Service call failed: %s"%e
@@ -59,6 +71,9 @@ class subscribeAndPublish():
 if __name__ =='__main__':
     #Initialize node
     rospy.init_node('SubscribeAndPublish')
+    print 'Waiting for the server...'
+    rospy.wait_for_service('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory')
+    print 'Server Connected'
 
     try:
         subPub = subscribeAndPublish()
