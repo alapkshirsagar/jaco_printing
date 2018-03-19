@@ -1,3 +1,19 @@
+## Testing Complete System (reading data from text file)
+Connect and turn on Jaco.
+
+Connect Arduino (with extruder setup).
+
+```
+Terminal 1: roslaunch kinova_bringup kinova_robot.launch kinova_robotType:=j2s7s300
+Terminal 2: rosrun rosserial_python serial_node.py /dev/ttyACM0
+Terminal 3: roslaunch jaco_printing mainController.launch
+```
+### Cool Down Extruder
+```
+Terminal 1: rosrun rosserial_python serial_node.py /dev/ttyACM0
+Terminal 2: rostopic pub /extruder std_msgs/String "M104 S20"
+```
+
 ## Procedure to run JACO2 using ROS Laptop and Rhino Plugin (on a Windows PC):
 Ensure that the ROS Laptop and Windows PC are connected to the same network *(TP-LINK_AP_F1_CE)*
 

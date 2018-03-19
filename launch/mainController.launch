@@ -1,0 +1,5 @@
+<launch>
+    <node name="mainController" pkg="jaco_printing" type="mainController.py" output="screen" >
+        <rosparam file="$(find jaco_printing)/config/taskParameters.yaml" command="load" />
+    </node>
+</launch>
