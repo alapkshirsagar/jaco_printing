@@ -2,8 +2,10 @@
 
 import rospy
 import rospkg
+import actionlib
 import numpy as np
 import tf
+import math
 from std_msgs.msg import String
 from kinova_msgs.srv import *
 from kinova_msgs.msg import *
@@ -13,7 +15,8 @@ class mainController():
     def __init__(self):
         """ Global variable """
         self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit md
-        self.newOrigin = [-0.0132637824863,-0.532912909985,0.553722143173,np.pi/2,0,0] # new origin corresponds to table height and extruder pointing downward
+        self.newOrigin = [0.015-0.001,-0.51,0.496+0.1,np.pi/2,0,0] # new origin corresponds to table height and extruder pointing downward
+
 
         # Target pose for commanding the robot
         self.targetPose = KinovaPose()
@@ -50,24 +53,40 @@ class mainController():
         #Topic for getting response from Arduino
         rospy.Subscriber('/chatter',String, self.getArduinoResponse)
 
-########### Services ##########################################################
+########### Services and Actions ##############################################
         #Service for sending trajectory points to the robot
-        self.addPoseToCartesianTrajectory = rospy.ServiceProxy('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory', AddPoseToCartesianTrajectory)
+        service_address = '/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory'
+        self.addPoseToCartesianTrajectory = rospy.ServiceProxy(service_address, AddPoseToCartesianTrajectory)
+        print 'Waiting for the service server...'
+        rospy.wait_for_service('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory')
+        print 'Service Server Connected'
+
+
+        """Send a cartesian goal to the action server."""
+        action_address = '/j2s7s300_driver/pose_action/tool_pose'
+        self.poseActionClient = actionlib.SimpleActionClient(action_address, kinova_msgs.msg.ArmPoseAction)
+        print 'Waiting for action server...'
+        self.poseActionClient.wait_for_server()
+        print 'Service Server Connected'
+
 
 ###############################################################################
         # Startup Procedure : Heat Extruder
         if rospy.get_param('~heatExtruder'):
             self.heatExtruder()
 
+        #self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ]);
+
         # Startup Procedure: Move Robot to New Origin
         if rospy.get_param('~moveArm'):
-            self.addPoseToCartesianTrajectoryClient(self.targetPose,0.05,0)
+            self.addPoseToCartesianTrajectoryClient(self.targetPose,0.05,2)
 
             # Continue with rest of the procedure
             if rospy.get_param('~rhinoPlugin'):
                 #//TODO Call rhino plugin connection
                 print "Rhino Plugin needs to be connected"
             else:
+                print "Rhino plugin not needed"
                 self.commandJacoTextFile()
         rospy.spin()
 ###############################################################################
@@ -100,7 +119,7 @@ class mainController():
     #This callback function is used to control Jaco and Extruder when testing using a text file.
     #Send the target position to add_pose_to_Cartesian_trajectory. The fields of text file are: (0,X,Y,Z,Rx,Ry,Rz,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
     def commandJacoTextFile(self):
-        file = open(self.packagePath+'/scripts/pointlog(1).txt')
+        file = open(self.packagePath+'/scripts/pointlog.txt')
         for line in file:
             line = line.strip()
             fields = line.split(',')
@@ -112,12 +131,21 @@ class mainController():
                 self.targetPose.ThetaX = self.newOrigin[3]+float(fields[4])*3.14/180
                 self.targetPose.ThetaY = self.newOrigin[4]+float(fields[5])*3.14/180
                 self.targetPose.ThetaZ = self.newOrigin[5]+float(fields[6])*3.14/180
-                pause = fields[9]
+                pause = int (fields[9])
                 MaxTranslationVelocity = 0.05
 
-                #Add targetPose to robot trajectory using the service
-                #print 'Requesting add_pose_to_Cartesian_trajectory service'
-                self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,pause)
+                if pause == 0:
+                    #Add targetPose to robot trajectory using the service
+                    #print 'Requesting add_pose_to_Cartesian_trajectory service'
+                    self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,pause)
+                else:
+                    #Use action client to move the robot and pause
+                    self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ])
+
+                    #Pause robot
+                    print "Pausing for"
+                    print rospy.Duration(pause,0)
+                    rospy.sleep(rospy.Duration(pause,0))
 
                 # Send extruder commands to arduino
                 self.arduinoPub.publish("G1 E"+fields[7])
@@ -136,18 +164,58 @@ class mainController():
     #Client function for addPoseToCartesianTrajectory service
     def addPoseToCartesianTrajectoryClient(self,targetPose,MaxTranslationVelocity,pause):
         try:
+            print targetPose
             resp1 = self.addPoseToCartesianTrajectory(targetPose.X,targetPose.Y,targetPose.Z,targetPose.ThetaX,targetPose.ThetaY,targetPose.ThetaZ,MaxTranslationVelocity)
             #print resp1
-            #Pause robot
-            print "Pausing for"
-            print rospy.Duration(int(pause),0)
-            rospy.sleep(rospy.Duration(int(pause),0))
+
             self.rhinoPub.publish('Motion.\r')
             self.sentCounter = self.sentCounter+1
             print 'Sent Counter:%i'%self.sentCounter
-            return resp1
         except rospy.ServiceException, e:
             print "Service call failed: %s"%e
+
+    # Cartesian Pose action client
+    def cartesian_pose_client(self,position, orientation):
+        goal = kinova_msgs.msg.ArmPoseGoal()
+        goal.pose.header = std_msgs.msg.Header(frame_id=('j2s7s300_link_base'))
+        orientation_q = self.EulerXYZ2Quaternion(orientation)
+        goal.pose.pose.position = geometry_msgs.msg.Point(
+            x=position[0], y=position[1], z=position[2])
+        goal.pose.pose.orientation = geometry_msgs.msg.Quaternion(
+            x=orientation_q[0], y=orientation_q[1], z=orientation_q[2], w=orientation_q[3])
+
+        #print('goal.pose in client 1: {}'.format(goal.pose.pose)) # debug
+
+        self.poseActionClient.send_goal(goal)
+        if self.poseActionClient.wait_for_result(rospy.Duration(10.0)):
+            print 'Reached Position'
+            return True
+        else:
+            self.poseActionClient.cancel_all_goals()
+            print('        the cartesian action timed-out')
+            return None
+
+
+
+    # Convert Euler angles to Quaternions
+    def EulerXYZ2Quaternion(self,EulerXYZ_):
+        tx_, ty_, tz_ = EulerXYZ_[0:3]
+        sx = math.sin(0.5 * tx_)
+        cx = math.cos(0.5 * tx_)
+        sy = math.sin(0.5 * ty_)
+        cy = math.cos(0.5 * ty_)
+        sz = math.sin(0.5 * tz_)
+        cz = math.cos(0.5 * tz_)
+
+        qx_ = sx * cy * cz + cx * sy * sz
+        qy_ = -sx * cy * sz + cx * sy * cz
+        qz_ = sx * sy * cz + cx * cy * sz
+        qw_ = -sx * sy * sz + cx * cy * cz
+
+        Q_ = [qx_, qy_, qz_, qw_]
+        return Q_
+
+
 
     #Heat Extruder to desired temperature
     def heatExtruder(self):
@@ -168,9 +236,6 @@ class mainController():
 if __name__ =='__main__':
     #Initialize node
     rospy.init_node('mainController')
-    print 'Waiting for the server...'
-    rospy.wait_for_service('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory')
-    print 'Server Connected'
 
     try:
         brain = mainController()
