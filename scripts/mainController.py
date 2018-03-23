@@ -15,17 +15,20 @@ class mainController():
     def __init__(self):
         """ Global variable """
         self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit md
-        self.newOrigin = [0.015-0.001,-0.51,0.496+0.1,np.pi/2,0,0] # new origin corresponds to table height and extruder pointing downward
+        self.newOrigin = [0.015+0.01,-0.51,0.496+0.058,np.pi/2,0,0] # new origin corresponds to table height and extruder pointing downward
 
 
         # Target pose for commanding the robot
         self.targetPose = KinovaPose()
         self.targetPose.X = self.newOrigin[0]
         self.targetPose.Y = self.newOrigin[1]
-        self.targetPose.Z = self.newOrigin[2]
+        self.targetPose.Z = self.newOrigin[2]+0.1
         self.targetPose.ThetaX = self.newOrigin[3]
         self.targetPose.ThetaY = self.newOrigin[4]
         self.targetPose.ThetaZ = self.newOrigin[5]
+
+        self.MaxTranslationVelocity = 0.02
+        self.MaxRotationalVelocity = 0.02
 
         self.receivedCounter = 0 #Keep count of messages received from RhinoPlugin
         self.sentCounter = 0 #Keep count of responses sent to RhinoPlugin
@@ -75,11 +78,12 @@ class mainController():
         if rospy.get_param('~heatExtruder'):
             self.heatExtruder()
 
-        #self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ]);
+        #self.cartesian_pose_client([self.homePosition[0],self.homePosition[1],self.homePosition[2]+0.1],[self.homePosition[3],self.homePosition[4],self.homePosition[5]],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
+        #self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
+        self.addPoseToCartesianTrajectoryClient(self.targetPose,self.MaxTranslationVelocity,self.MaxRotationalVelocity,2)
 
         # Startup Procedure: Move Robot to New Origin
         if rospy.get_param('~moveArm'):
-            self.addPoseToCartesianTrajectoryClient(self.targetPose,0.05,2)
 
             # Continue with rest of the procedure
             if rospy.get_param('~rhinoPlugin'):
@@ -100,18 +104,19 @@ class mainController():
         fields = message.data.split(',')
         if len(fields) == 12:
             print fields
-            self.targetPose.X = self.newOrigin[0]+float(fields[1])/1000
-            self.targetPose.Y = self.newOrigin[1]+float(fields[2])/1000
+            self.targetPose.X = self.newOrigin[0]+float(fields[2])/1000
+            self.targetPose.Y = self.newOrigin[1]+float(fields[1])/1000
             self.targetPose.Z = self.newOrigin[2]+float(fields[3])/1000
             self.targetPose.ThetaX = self.newOrigin[3]+float(fields[4])*3.14/180
             self.targetPose.ThetaY = self.newOrigin[4]+float(fields[5])*3.14/180
             self.targetPose.ThetaZ = self.newOrigin[5]+float(fields[6])*3.14/180
             pause = fields[9]
-            MaxTranslationVelocity = 0.05
+            MaxTranslationVelocity = self.MaxTranslationVelocity
+            MaxRotationalVelocity = self.MaxRotationalVelocity
 
             #Add targetPose to robot trajectory using the service
             #print 'Requesting add_pose_to_Cartesian_trajectory service'
-            self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,pause)
+            self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,MaxRotationalVelocity,pause)
 
             # Send extruder commands to arduino
             self.arduinoPub.publish("G1 E"+fields[7])
@@ -119,36 +124,44 @@ class mainController():
     #This callback function is used to control Jaco and Extruder when testing using a text file.
     #Send the target position to add_pose_to_Cartesian_trajectory. The fields of text file are: (0,X,Y,Z,Rx,Ry,Rz,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
     def commandJacoTextFile(self):
-        file = open(self.packagePath+'/scripts/pointlog.txt')
+        file = open(self.packagePath+'/scripts/pointlog(2).txt')
         for line in file:
             line = line.strip()
             fields = line.split(',')
             if len(fields) == 12:
                 print fields
-                self.targetPose.X = self.newOrigin[0]+float(fields[1])/1000
-                self.targetPose.Y = self.newOrigin[1]+float(fields[2])/1000
+                self.targetPose.X = self.newOrigin[0]+float(fields[2])/1000
+                self.targetPose.Y = self.newOrigin[1]+float(fields[1])/1000
                 self.targetPose.Z = self.newOrigin[2]+float(fields[3])/1000
                 self.targetPose.ThetaX = self.newOrigin[3]+float(fields[4])*3.14/180
                 self.targetPose.ThetaY = self.newOrigin[4]+float(fields[5])*3.14/180
                 self.targetPose.ThetaZ = self.newOrigin[5]+float(fields[6])*3.14/180
                 pause = int (fields[9])
-                MaxTranslationVelocity = 0.05
+                MaxTranslationVelocity = self.MaxTranslationVelocity
+                MaxRotationalVelocity = self.MaxRotationalVelocity
 
                 if pause == 0:
                     #Add targetPose to robot trajectory using the service
                     #print 'Requesting add_pose_to_Cartesian_trajectory service'
-                    self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,pause)
+                    self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,MaxRotationalVelocity,pause)
                 else:
                     #Use action client to move the robot and pause
-                    self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ])
+                    self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],self.MaxTranslationVelocity,self.MaxRotationalVelocity)
 
-                    #Pause robot
-                    print "Pausing for"
-                    print rospy.Duration(pause,0)
-                    rospy.sleep(rospy.Duration(pause,0))
+                # Send cooling commands to arduino
+                if int(fields[8]) == 1:
+                    self.arduinoPub.publish("M108 S1")
+                else:
+                    self.arduinoPub.publish("M108 S0")
 
                 # Send extruder commands to arduino
                 self.arduinoPub.publish("G1 E"+fields[7])
+
+                #Pause robot
+                print "Pausing for"
+                print rospy.Duration(pause,0)
+                rospy.sleep(rospy.Duration(pause,0))
+
 
     #This callback function is used to get responses from Arduino
     def getArduinoResponse(self,message):
@@ -162,10 +175,10 @@ class mainController():
 
 ################################################################################
     #Client function for addPoseToCartesianTrajectory service
-    def addPoseToCartesianTrajectoryClient(self,targetPose,MaxTranslationVelocity,pause):
+    def addPoseToCartesianTrajectoryClient(self,targetPose,MaxTranslationVelocity,MaxRotationalVelocity,pause):
         try:
             print targetPose
-            resp1 = self.addPoseToCartesianTrajectory(targetPose.X,targetPose.Y,targetPose.Z,targetPose.ThetaX,targetPose.ThetaY,targetPose.ThetaZ,MaxTranslationVelocity)
+            resp1 = self.addPoseToCartesianTrajectory(targetPose.X,targetPose.Y,targetPose.Z,targetPose.ThetaX,targetPose.ThetaY,targetPose.ThetaZ,MaxTranslationVelocity,MaxRotationalVelocity)
             #print resp1
 
             self.rhinoPub.publish('Motion.\r')
@@ -175,9 +188,11 @@ class mainController():
             print "Service call failed: %s"%e
 
     # Cartesian Pose action client
-    def cartesian_pose_client(self,position, orientation):
+    def cartesian_pose_client(self,position, orientation,MaxTranslationVelocity,MaxRotationalVelocity):
         goal = kinova_msgs.msg.ArmPoseGoal()
         goal.pose.header = std_msgs.msg.Header(frame_id=('j2s7s300_link_base'))
+        goal.MaxTranslationVelocity = MaxTranslationVelocity;
+        goal.MaxRotationalVelocity = MaxRotationalVelocity;
         orientation_q = self.EulerXYZ2Quaternion(orientation)
         goal.pose.pose.position = geometry_msgs.msg.Point(
             x=position[0], y=position[1], z=position[2])
