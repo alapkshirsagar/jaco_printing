@@ -16,7 +16,7 @@ class mainController():
         """ Global variable """
         self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit md
         self.newOrigin = [0.015+0.01,-0.51,0.496+0.058,np.pi/2,0,0] # new origin corresponds to table height and extruder pointing downward
-
+        #self.newOrigin = [0.015+0.01,-0.51,0.496+0.058,180,np.pi/2,0] # use this for a different orientation
 
         # Target pose for commanding the robot
         self.targetPose = KinovaPose()
@@ -27,8 +27,8 @@ class mainController():
         self.targetPose.ThetaY = self.newOrigin[4]
         self.targetPose.ThetaZ = self.newOrigin[5]
 
-        self.MaxTranslationVelocity = 0.02
-        self.MaxRotationalVelocity = 0.02
+        self.MaxTranslationVelocity = 0.2
+        self.MaxRotationalVelocity = 0.2
 
         self.receivedCounter = 0 #Keep count of messages received from RhinoPlugin
         self.sentCounter = 0 #Keep count of responses sent to RhinoPlugin
@@ -74,17 +74,21 @@ class mainController():
 
 
 ###############################################################################
-        # Startup Procedure : Heat Extruder
+        ## Startup Procedure : Heat Extruder
         if rospy.get_param('~heatExtruder'):
             self.heatExtruder()
 
-        #self.cartesian_pose_client([self.homePosition[0],self.homePosition[1],self.homePosition[2]+0.1],[self.homePosition[3],self.homePosition[4],self.homePosition[5]],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
-        #self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
-        self.addPoseToCartesianTrajectoryClient(self.targetPose,self.MaxTranslationVelocity,self.MaxRotationalVelocity,2)
+        ## Startup Procedure: Move Robot to New Origin
+        # Move arm up from home position by 10cm
+        self.cartesian_pose_client([self.homePosition[0],self.homePosition[1],self.homePosition[2]+0.1],[self.homePosition[3],self.homePosition[4],self.homePosition[5]],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
 
-        # Startup Procedure: Move Robot to New Origin
+        # Move arm up to target position using action
+        self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
+
+        # Move arm up to target position using service
+        #self.addPoseToCartesianTrajectoryClient(self.targetPose,self.MaxTranslationVelocity,self.MaxRotationalVelocity,2)
+
         if rospy.get_param('~moveArm'):
-
             # Continue with rest of the procedure
             if rospy.get_param('~rhinoPlugin'):
                 #//TODO Call rhino plugin connection
@@ -92,7 +96,7 @@ class mainController():
             else:
                 print "Rhino plugin not needed"
                 self.commandJacoTextFile()
-        rospy.spin()
+            rospy.spin()
 ###############################################################################
 ####################Callback functions#########################################
 
@@ -124,8 +128,9 @@ class mainController():
     #This callback function is used to control Jaco and Extruder when testing using a text file.
     #Send the target position to add_pose_to_Cartesian_trajectory. The fields of text file are: (0,X,Y,Z,Rx,Ry,Rz,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
     def commandJacoTextFile(self):
-        file = open(self.packagePath+'/scripts/pointlog(2).txt')
-        for line in file:
+        file = open(self.packagePath+'/scripts/pointlog(1).txt')
+        line = file.readline()
+        while line and not rospy.is_shutdown():
             line = line.strip()
             fields = line.split(',')
             if len(fields) == 12:
@@ -137,8 +142,8 @@ class mainController():
                 self.targetPose.ThetaY = self.newOrigin[4]+float(fields[5])*3.14/180
                 self.targetPose.ThetaZ = self.newOrigin[5]+float(fields[6])*3.14/180
                 pause = int (fields[9])
-                MaxTranslationVelocity = self.MaxTranslationVelocity
-                MaxRotationalVelocity = self.MaxRotationalVelocity
+                MaxTranslationVelocity = float(fields[10])/1000
+                MaxRotationalVelocity = float(fields[10])/1000
 
                 if pause == 0:
                     #Add targetPose to robot trajectory using the service
@@ -146,7 +151,8 @@ class mainController():
                     self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,MaxRotationalVelocity,pause)
                 else:
                     #Use action client to move the robot and pause
-                    self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],self.MaxTranslationVelocity,self.MaxRotationalVelocity)
+                    self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],MaxTranslationVelocity,MaxRotationalVelocity)
+                    pause = pause + 2
 
                 # Send cooling commands to arduino
                 if int(fields[8]) == 1:
@@ -160,8 +166,10 @@ class mainController():
                 #Pause robot
                 print "Pausing for"
                 print rospy.Duration(pause,0)
-                rospy.sleep(rospy.Duration(pause,0))
-
+                if not rospy.is_shutdown():
+                    rospy.sleep(rospy.Duration(pause,0))
+            line = file.readline()
+        file.close()
 
     #This callback function is used to get responses from Arduino
     def getArduinoResponse(self,message):
@@ -202,13 +210,16 @@ class mainController():
         #print('goal.pose in client 1: {}'.format(goal.pose.pose)) # debug
 
         self.poseActionClient.send_goal(goal)
-        if self.poseActionClient.wait_for_result(rospy.Duration(10.0)):
-            print 'Reached Position'
-            return True
-        else:
-            self.poseActionClient.cancel_all_goals()
-            print('        the cartesian action timed-out')
-            return None
+        self.poseActionClient.wait_for_result()
+        #return True
+
+        # if self.poseActionClient.wait_for_result(rospy.Duration(10.0)):
+        #     print 'Reached Position'
+        #     return True
+        # else:
+        #     self.poseActionClient.cancel_all_goals()
+        #     print('        the cartesian action timed-out')
+        #     return None
 
 
 
@@ -230,6 +241,10 @@ class mainController():
         Q_ = [qx_, qy_, qz_, qw_]
         return Q_
 
+    # Get quaternions from RhinoPlugin and convert them to Quaternions for Robot End Effector
+    def RhinoToJacoQuaternion(self,quaternionRhino):
+        #//TODO
+        print "TODO"
 
 
     #Heat Extruder to desired temperature

@@ -14,6 +14,10 @@ Terminal 1: rosrun rosserial_python serial_node.py /dev/ttyACM0
 Terminal 2: rostopic pub /extruder std_msgs/String "M104 S20"
 ```
 
+## Pump
+rostopic pub /extruder std_msgs/String "M108 S0"
+rostopic pub /extruder std_msgs/String "M108 S1"
+
 ## Procedure to run JACO2 using ROS Laptop and Rhino Plugin (on a Windows PC):
 Ensure that the ROS Laptop and Windows PC are connected to the same network *(TP-LINK_AP_F1_CE)*
 
