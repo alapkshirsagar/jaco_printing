@@ -18,6 +18,8 @@ class mainController():
         self.newOrigin = [0.015+0.01,-0.51,0.496+0.058,np.pi/2,0,0] # new origin corresponds to table height and extruder pointing downward
         #self.newOrigin = [0.015+0.01,-0.51,0.496+0.058,180,np.pi/2,0] # use this for a different orientation
 
+        self.armStopped = False #To track whether arm was stopped in emergency mode
+
         # Target pose for commanding the robot
         self.targetPose = KinovaPose()
         self.targetPose.X = self.newOrigin[0]
@@ -56,21 +58,38 @@ class mainController():
         #Topic for getting response from Arduino
         rospy.Subscriber('/chatter',String, self.getArduinoResponse)
 
+        #Topic for getting joint torques
+        rospy.Subscriber('/j2s7s300_driver/out/joint_torques', JointAngles,self.monitorJointTorques)
+
 ########### Services and Actions ##############################################
         #Service for sending trajectory points to the robot
         service_address = '/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory'
         self.addPoseToCartesianTrajectory = rospy.ServiceProxy(service_address, AddPoseToCartesianTrajectory)
-        print 'Waiting for the service server...'
-        rospy.wait_for_service('/j2s7s300_driver/in/add_pose_to_Cartesian_trajectory')
-        print 'Service Server Connected'
+        print 'Waiting for addPoseToCartesianTrajectory service server...'
+        rospy.wait_for_service(service_address)
+        print 'addPoseToCartesianTrajectory service server Connected'
 
 
-        """Send a cartesian goal to the action server."""
+        #Action Client for cartesian position control
         action_address = '/j2s7s300_driver/pose_action/tool_pose'
         self.poseActionClient = actionlib.SimpleActionClient(action_address, kinova_msgs.msg.ArmPoseAction)
-        print 'Waiting for action server...'
+        print 'Waiting for ArmPoseAction server...'
         self.poseActionClient.wait_for_server()
-        print 'Service Server Connected'
+        print 'ArmPoseAction Server Connected'
+
+        #Service for emergency stop
+        emergency_service = '/j2s7s300_driver/in/stop'
+        self.emergencyStop = rospy.ServiceProxy(emergency_service, Stop)
+        print 'Waiting for Stop service'
+        rospy.wait_for_service(emergency_service)
+        print 'Stop service server connected'
+
+        #Service for restarting the arm
+        start_service = '/j2s7s300_driver/in/start'
+        self.startArm = rospy.ServiceProxy(start_service, Start)
+        print 'Waiting for Start service'
+        rospy.wait_for_service(start_service)
+        print 'Start service server connected'
 
 
 ###############################################################################
@@ -80,6 +99,8 @@ class mainController():
 
         ## Startup Procedure: Move Robot to New Origin
         # Move arm up from home position by 10cm
+        self.startArmClient()
+
         self.cartesian_pose_client([self.homePosition[0],self.homePosition[1],self.homePosition[2]+0.1],[self.homePosition[3],self.homePosition[4],self.homePosition[5]],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
 
         # Move arm up to target position using action
@@ -97,8 +118,15 @@ class mainController():
                 print "Rhino plugin not needed"
                 self.commandJacoTextFile()
             rospy.spin()
-###############################################################################
-####################Callback functions#########################################
+
+####################Callback functions#########################################################
+
+    #This callback function monitors the Joint Torques and calls the emergencyStop service if the Joint Torques exceed certain value
+    def monitorJointTorques(self,torques):
+        if abs(torques.joint1) > 1:
+            self.emergencyStopClient()
+        elif self.armStopped:
+            self.startArmClient()
 
     #This callback function is used to control Jaco and Extruder when Rhino Plugin in connected.
     #Send the target position to add_pose_to_Cartesian_trajectory. The fields of 'message' are: (0,X,Y,Z,Rx,Ry,Rz,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
@@ -125,7 +153,78 @@ class mainController():
             # Send extruder commands to arduino
             self.arduinoPub.publish("G1 E"+fields[7])
 
-    #This callback function is used to control Jaco and Extruder when testing using a text file.
+    #This callback function is used to get responses from Arduino
+    def getArduinoResponse(self,message):
+        #Update temperature of extruder if previous message was "CurrentTemperature"
+        if self.extruderTemperatureFlag:
+            self.extruderTemperature = float(message.data)
+            print self.extruderTemperature
+            self.extruderTemperatureFlag = False
+        if message.data == "CurrentTemperature":
+            self.extruderTemperatureFlag = True
+
+################################## Service and Action Clients #######################################
+    #Client function for addPoseToCartesianTrajectory service
+    def addPoseToCartesianTrajectoryClient(self,targetPose,MaxTranslationVelocity,MaxRotationalVelocity,pause):
+        try:
+            print targetPose
+            resp1 = self.addPoseToCartesianTrajectory(targetPose.X,targetPose.Y,targetPose.Z,targetPose.ThetaX,targetPose.ThetaY,targetPose.ThetaZ,MaxTranslationVelocity,MaxRotationalVelocity)
+            #print resp1
+
+            self.rhinoPub.publish('Motion.\r')
+            self.sentCounter = self.sentCounter+1
+            print 'Sent Counter:%i'%self.sentCounter
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e
+
+    ## Cartesian Pose action client
+    def cartesian_pose_client(self,position, orientation,MaxTranslationVelocity,MaxRotationalVelocity):
+        goal = kinova_msgs.msg.ArmPoseGoal()
+        goal.pose.header = std_msgs.msg.Header(frame_id=('j2s7s300_link_base'))
+        goal.MaxTranslationVelocity = MaxTranslationVelocity;
+        goal.MaxRotationalVelocity = MaxRotationalVelocity;
+        orientation_q = self.EulerXYZ2Quaternion(orientation)
+        goal.pose.pose.position = geometry_msgs.msg.Point(
+            x=position[0], y=position[1], z=position[2])
+        goal.pose.pose.orientation = geometry_msgs.msg.Quaternion(
+            x=orientation_q[0], y=orientation_q[1], z=orientation_q[2], w=orientation_q[3])
+
+        #print('goal.pose in client 1: {}'.format(goal.pose.pose)) # debug
+
+        self.poseActionClient.send_goal(goal)
+        self.poseActionClient.wait_for_result()
+        #return True
+
+        # if self.poseActionClient.wait_for_result(rospy.Duration(10.0)):
+        #     print 'Reached Position'
+        #     return True
+        # else:
+        #     self.poseActionClient.cancel_all_goals()
+        #     print('        the cartesian action timed-out')
+        #     return None
+
+    ## Emergency Stop Action Client
+    def emergencyStopClient(self):
+        try:
+            response = self.emergencyStop()
+            print response
+            self.armStopped = True
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e
+
+
+    ## Emergency Stop Action Client
+    def startArmClient(self):
+        try:
+            response = self.startArm()
+            print response
+            self.armStopped = False
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e
+
+
+#################################### Methods ###############################################
+    #This function is used to control Jaco and Extruder when testing using a text file.
     #Send the target position to add_pose_to_Cartesian_trajectory. The fields of text file are: (0,X,Y,Z,Rx,Ry,Rz,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
     def commandJacoTextFile(self):
         file = open(self.packagePath+'/scripts/pointlog(1).txt')
@@ -170,57 +269,6 @@ class mainController():
                     rospy.sleep(rospy.Duration(pause,0))
             line = file.readline()
         file.close()
-
-    #This callback function is used to get responses from Arduino
-    def getArduinoResponse(self,message):
-        #Update temperature of extruder if previous message was "CurrentTemperature"
-        if self.extruderTemperatureFlag:
-            self.extruderTemperature = float(message.data)
-            print self.extruderTemperature
-            self.extruderTemperatureFlag = False
-        if message.data == "CurrentTemperature":
-            self.extruderTemperatureFlag = True
-
-################################################################################
-    #Client function for addPoseToCartesianTrajectory service
-    def addPoseToCartesianTrajectoryClient(self,targetPose,MaxTranslationVelocity,MaxRotationalVelocity,pause):
-        try:
-            print targetPose
-            resp1 = self.addPoseToCartesianTrajectory(targetPose.X,targetPose.Y,targetPose.Z,targetPose.ThetaX,targetPose.ThetaY,targetPose.ThetaZ,MaxTranslationVelocity,MaxRotationalVelocity)
-            #print resp1
-
-            self.rhinoPub.publish('Motion.\r')
-            self.sentCounter = self.sentCounter+1
-            print 'Sent Counter:%i'%self.sentCounter
-        except rospy.ServiceException, e:
-            print "Service call failed: %s"%e
-
-    # Cartesian Pose action client
-    def cartesian_pose_client(self,position, orientation,MaxTranslationVelocity,MaxRotationalVelocity):
-        goal = kinova_msgs.msg.ArmPoseGoal()
-        goal.pose.header = std_msgs.msg.Header(frame_id=('j2s7s300_link_base'))
-        goal.MaxTranslationVelocity = MaxTranslationVelocity;
-        goal.MaxRotationalVelocity = MaxRotationalVelocity;
-        orientation_q = self.EulerXYZ2Quaternion(orientation)
-        goal.pose.pose.position = geometry_msgs.msg.Point(
-            x=position[0], y=position[1], z=position[2])
-        goal.pose.pose.orientation = geometry_msgs.msg.Quaternion(
-            x=orientation_q[0], y=orientation_q[1], z=orientation_q[2], w=orientation_q[3])
-
-        #print('goal.pose in client 1: {}'.format(goal.pose.pose)) # debug
-
-        self.poseActionClient.send_goal(goal)
-        self.poseActionClient.wait_for_result()
-        #return True
-
-        # if self.poseActionClient.wait_for_result(rospy.Duration(10.0)):
-        #     print 'Reached Position'
-        #     return True
-        # else:
-        #     self.poseActionClient.cancel_all_goals()
-        #     print('        the cartesian action timed-out')
-        #     return None
-
 
 
     # Convert Euler angles to Quaternions
