@@ -5,6 +5,7 @@ import rospkg
 import actionlib
 import numpy as np
 import tf
+from tf import transformations as homogeneous
 import math
 from std_msgs.msg import String
 from kinova_msgs.srv import *
@@ -15,8 +16,8 @@ class mainController():
     def __init__(self):
         """ Global variable """
         self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit md
-        self.newOrigin = [0.015+0.01,-0.51,0.496+0.058,np.pi/2,0,0] # new origin corresponds to table height and extruder pointing downward
-        #self.newOrigin = [0.015+0.01,-0.51,0.496+0.058,180,np.pi/2,0] # use this for a different orientation
+        self.newOrigin = [0.016,-0.51+0.085,0.554-0.093,0,0,0] # new origin corresponds to table height and extruder pointing downward
+        self.extruderToGripper = [0.085,0,-0.093] # Geometrical distance between gripper and extruder
 
         self.armStopped = False #To track whether arm was stopped in emergency mode
 
@@ -24,7 +25,7 @@ class mainController():
         self.targetPose = KinovaPose()
         self.targetPose.X = self.newOrigin[0]
         self.targetPose.Y = self.newOrigin[1]
-        self.targetPose.Z = self.newOrigin[2]+0.1
+        self.targetPose.Z = self.newOrigin[2]
         self.targetPose.ThetaX = self.newOrigin[3]
         self.targetPose.ThetaY = self.newOrigin[4]
         self.targetPose.ThetaZ = self.newOrigin[5]
@@ -40,6 +41,9 @@ class mainController():
 
         self.rospack = rospkg.RosPack()
         self.packagePath = self.rospack.get_path('jaco_printing') #Get directory path to jaco_printing package
+
+        self.JtoR = homogeneous.identity_matrix() #homogeneous transformation from Jaco base frame to Rhino base frame
+        self.EtoG = homogeneous.identity_matrix() #homogeneous transformation from Extruder to Gripper
 
 
 
@@ -59,7 +63,7 @@ class mainController():
         rospy.Subscriber('/chatter',String, self.getArduinoResponse)
 
         #Topic for getting joint torques
-        rospy.Subscriber('/j2s7s300_driver/out/joint_torques', JointAngles,self.monitorJointTorques)
+        #rospy.Subscriber('/j2s7s300_driver/out/joint_torques', JointAngles,self.monitorJointTorques)
 
 ########### Services and Actions ##############################################
         #Service for sending trajectory points to the robot
@@ -97,14 +101,18 @@ class mainController():
         if rospy.get_param('~heatExtruder'):
             self.heatExtruder()
 
-        ## Startup Procedure: Move Robot to New Origin
-        # Move arm up from home position by 10cm
-        self.startArmClient()
+        ## Calculate transformation Matrices
+        self.RhinoToJacoTransformationMatrix()
 
-        self.cartesian_pose_client([self.homePosition[0],self.homePosition[1],self.homePosition[2]+0.1],[self.homePosition[3],self.homePosition[4],self.homePosition[5]],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
+        ## Startup Procedure: Move Robot to New Origin
+        self.startArmClient() #Remove Emergency Stop flag
+
+        # Move arm up from home position by 10cm
+        #self.cartesian_pose_client([self.homePosition[0],self.homePosition[1],self.homePosition[2]+0.1],[self.homePosition[3],self.homePosition[4],self.homePosition[5]],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
 
         # Move arm up to target position using action
-        self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
+        #self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
+        self.cartesian_pose_client([0,0,0],self.EulerXYZ2Quaternion([0,0,0]),self.MaxTranslationVelocity,self.MaxRotationalVelocity)
 
         # Move arm up to target position using service
         #self.addPoseToCartesianTrajectoryClient(self.targetPose,self.MaxTranslationVelocity,self.MaxRotationalVelocity,2)
@@ -179,29 +187,23 @@ class mainController():
 
     ## Cartesian Pose action client
     def cartesian_pose_client(self,position, orientation,MaxTranslationVelocity,MaxRotationalVelocity):
+        JtoG = self.RhinoToJacoTransformation(position,orientation)
+        position =  homogeneous.translation_from_matrix(JtoG)
+        orientation = homogeneous.quaternion_from_matrix(JtoG)
+
         goal = kinova_msgs.msg.ArmPoseGoal()
         goal.pose.header = std_msgs.msg.Header(frame_id=('j2s7s300_link_base'))
         goal.MaxTranslationVelocity = MaxTranslationVelocity;
         goal.MaxRotationalVelocity = MaxRotationalVelocity;
-        orientation_q = self.EulerXYZ2Quaternion(orientation)
         goal.pose.pose.position = geometry_msgs.msg.Point(
             x=position[0], y=position[1], z=position[2])
         goal.pose.pose.orientation = geometry_msgs.msg.Quaternion(
-            x=orientation_q[0], y=orientation_q[1], z=orientation_q[2], w=orientation_q[3])
+            x=orientation[0], y=orientation[1], z=orientation[2], w=orientation[3])
 
-        #print('goal.pose in client 1: {}'.format(goal.pose.pose)) # debug
+        print('goal.pose in client 1: {}'.format(goal.pose.pose)) # debug
 
         self.poseActionClient.send_goal(goal)
         self.poseActionClient.wait_for_result()
-        #return True
-
-        # if self.poseActionClient.wait_for_result(rospy.Duration(10.0)):
-        #     print 'Reached Position'
-        #     return True
-        # else:
-        #     self.poseActionClient.cancel_all_goals()
-        #     print('        the cartesian action timed-out')
-        #     return None
 
     ## Emergency Stop Action Client
     def emergencyStopClient(self):
@@ -289,11 +291,6 @@ class mainController():
         Q_ = [qx_, qy_, qz_, qw_]
         return Q_
 
-    # Get quaternions from RhinoPlugin and convert them to Quaternions for Robot End Effector
-    def RhinoToJacoQuaternion(self,quaternionRhino):
-        #//TODO
-        print "TODO"
-
 
     #Heat Extruder to desired temperature
     def heatExtruder(self):
@@ -311,12 +308,37 @@ class mainController():
             r.sleep()
 
 
+    # Get position and quaternions from RhinoPlugin and convert them to position and Quaternions for Robot End Effector
+    def RhinoToJacoTransformation(self,positionRhino,quaternionRhino):
+        #homogeneous transformation from Rhino to Extruder
+        RtoE = homogeneous.concatenate_matrices(homogeneous.translation_matrix(positionRhino),homogeneous.quaternion_matrix(quaternionRhino))
+        print 'RtoE='
+        print RtoE
+
+        #Premultiply with Jaco to Rhino and Postmultiply with Extruder to Gripper
+        JtoG = homogeneous.concatenate_matrices(self.JtoR, RtoE, self.EtoG)
+        print 'JtoG='
+        print JtoG
+        #Convert homogeneous matrix to Quaternions and Positions
+        return JtoG
+
+    def RhinoToJacoTransformationMatrix(self):
+        self.JtoR = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.newOrigin), homogeneous.euler_matrix(np.pi,0,np.pi/2,'rxyz'))
+        print 'JtoR='
+        print self.JtoR
+        self.EtoG = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.extruderToGripper),homogeneous.euler_matrix(0,np.pi/2,-np.pi/2,'rxyz'))
+        print 'EtoG='
+        print self.EtoG
+
+
+
+
 if __name__ =='__main__':
     #Initialize node
     rospy.init_node('mainController')
 
     try:
         brain = mainController()
-
+        
     except rospy.ROSInterruptException:
         pass
