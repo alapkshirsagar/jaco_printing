@@ -26,8 +26,8 @@ Ensure that the ROS Laptop and Windows PC are connected to the same network *(TP
 ### Ubuntu Laptop (ROS):
 ```
 Terminal 1:
-export ROS_MASTER_URI=http://192.168.0.100:11311
-export ROS_IP=192.168.0.100
+export ROS_MASTER_URI=http://192.168.43.246:11311
+export ROS_IP=192.168.43.246
 cd catkin_ws_kinova
 source devel/setup.bash
 roslaunch kinova_bringup kinova_robot.launch kinova_robotType:=j2s7s300
@@ -35,13 +35,13 @@ roslaunch kinova_bringup kinova_robot.launch kinova_robotType:=j2s7s300
 Terminal 2:
 cd catkin_ws_kinova
 source devel/setup.bash
-export ROS_IP=192.168.0.100
-rosrun jaco_printing mainController.py
+export ROS_IP=192.168.43.246
+roslaunch jaco_printing mainController.launch
 
 Terminal 3 (for testing):
-Terminal 3 (for testing):
-export ROS_IP=192.168.0.100
-rostopic pub /command std_msgs/String '0,100,0,-10,0.07,-0.01,-1,0.1,-09,0,0,0,-10,2807,2,0,20, 4'
+export ROS_IP=192.168.43.246
+rostopic pub /command std_msgs/String '0,8.02,-29.94,150,0,0,0,1,1,0,0, 80, 9'
+
 
 ```
 

@@ -16,8 +16,10 @@ class mainController():
     def __init__(self):
         """ Global variable """
         self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit md
-        self.newOrigin = [0.016,-0.51+0.085,0.554-0.093,0,0,0] # new origin corresponds to table height and extruder pointing downward
-        self.extruderToGripper = [0.085,0,-0.093] # Geometrical distance between gripper and extruder
+        #self.newOrigin = [0,-0.51+0.085,0.756-0.093,0,0,0] # new origin corresponds to table height and extruder pointing downward
+        self.newOrigin = [-0.032+0.01,-0.55+0.01,0.452+0.007,0,0,0]
+        self.offset = geometry_msgs.msg.Vector3(0,-0.102,-0.105) # Geometrical distance between gripper and extruder
+        self.jacoToRhino = [self.newOrigin[0],self.newOrigin[1],self.newOrigin[2]]
 
         self.armStopped = False #To track whether arm was stopped in emergency mode
 
@@ -95,6 +97,14 @@ class mainController():
         rospy.wait_for_service(start_service)
         print 'Start service server connected'
 
+        #Service for setting end-effector offset
+        offset_service = '/j2s7s300_driver/in/set_end_effector_offset'
+        self.offsetService = rospy.ServiceProxy(offset_service, SetEndEffectorOffset)
+        print 'Waiting for Start service'
+        rospy.wait_for_service(offset_service)
+        print 'Start service server connected'
+
+
 
 ###############################################################################
         ## Startup Procedure : Heat Extruder
@@ -107,15 +117,24 @@ class mainController():
         ## Startup Procedure: Move Robot to New Origin
         self.startArmClient() #Remove Emergency Stop flag
 
+        ## Set offset
+        self.offsetClient()
+        rospy.sleep(1.0)
+
         # Move arm up from home position by 10cm
         #self.cartesian_pose_client([self.homePosition[0],self.homePosition[1],self.homePosition[2]+0.1],[self.homePosition[3],self.homePosition[4],self.homePosition[5]],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
 
         # Move arm up to target position using action
         #self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
-        self.cartesian_pose_client([0,0,0],self.EulerXYZ2Quaternion([0,0,0]),self.MaxTranslationVelocity,self.MaxRotationalVelocity)
+        self.cartesian_pose_client([0,0,-0.05],self.EulerXYZ2Quaternion([0,0,0]),self.MaxTranslationVelocity,self.MaxRotationalVelocity)
+        #self.cartesian_pose_client([0,0,0],self.EulerXYZ2Quaternion([0,-np.pi/4,0]),self.MaxTranslationVelocity,self.MaxRotationalVelocity)
+        #self.cartesian_pose_client([0,0,0],self.EulerXYZ2Quaternion([np.pi/4,0,0]),self.MaxTranslationVelocity,self.MaxRotationalVelocity)
 
         # Move arm up to target position using service
-        #self.addPoseToCartesianTrajectoryClient(self.targetPose,self.MaxTranslationVelocity,self.MaxRotationalVelocity,2)
+        #for i in range(0,5):
+        self.addPoseToCartesianTrajectoryClient([0,0,-0.05],self.EulerXYZ2Quaternion([0,0,0]),self.MaxTranslationVelocity,self.MaxRotationalVelocity,2)
+        rospy.sleep(2.0)
+
 
         if rospy.get_param('~moveArm'):
             # Continue with rest of the procedure
@@ -137,29 +156,61 @@ class mainController():
             self.startArmClient()
 
     #This callback function is used to control Jaco and Extruder when Rhino Plugin in connected.
-    #Send the target position to add_pose_to_Cartesian_trajectory. The fields of 'message' are: (0,X,Y,Z,Rx,Ry,Rz,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
+    #Send the target position to add_pose_to_Cartesian_trajectory. The fields of 'message' are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
     def getRhinoCommands(self, message):
         self.receivedCounter = self.receivedCounter+1
         print 'Received Counter:%i'%self.receivedCounter
         fields = message.data.split(',')
-        if len(fields) == 12:
-            print fields
-            self.targetPose.X = self.newOrigin[0]+float(fields[2])/1000
-            self.targetPose.Y = self.newOrigin[1]+float(fields[1])/1000
-            self.targetPose.Z = self.newOrigin[2]+float(fields[3])/1000
-            self.targetPose.ThetaX = self.newOrigin[3]+float(fields[4])*3.14/180
-            self.targetPose.ThetaY = self.newOrigin[4]+float(fields[5])*3.14/180
-            self.targetPose.ThetaZ = self.newOrigin[5]+float(fields[6])*3.14/180
-            pause = fields[9]
-            MaxTranslationVelocity = self.MaxTranslationVelocity
-            MaxRotationalVelocity = self.MaxRotationalVelocity
+        if len(fields) == 13:
+            # print fields
+            # self.targetPose.X = self.newOrigin[0]+float(fields[2])/1000
+            # self.targetPose.Y = self.newOrigin[1]+float(fields[1])/1000
+            # self.targetPose.Z = self.newOrigin[2]+float(fields[3])/1000
+            # self.targetPose.ThetaX = self.newOrigin[3]+float(fields[4])*3.14/180
+            # self.targetPose.ThetaY = self.newOrigin[4]+float(fields[5])*3.14/180
+            # self.targetPose.ThetaZ = self.newOrigin[5]+float(fields[6])*3.14/180
+            position = [-1*float(fields[1])/1000, -1*float(fields[2])/1000, -1*float(fields[3])/1000]
+            orientation = [float(fields[4]),float(fields[5]),float(fields[6]),float(fields[7])]
+            print orientation
+            pause = int (fields[10])
+            MaxTranslationVelocity = float(fields[11])/1000
+            MaxRotationalVelocity = float(fields[11])/1000
 
-            #Add targetPose to robot trajectory using the service
-            #print 'Requesting add_pose_to_Cartesian_trajectory service'
-            self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,MaxRotationalVelocity,pause)
+            # Send cooling commands to arduino
+            if int(fields[9]) == 1:
+                self.arduinoPub.publish("M106 S1")
+            else:
+                self.arduinoPub.publish("M106 S0")
+
+
+
+
+            if pause == 0:
+                #Add targetPose to robot trajectory using the service
+                #print 'Requesting add_pose_to_Cartesian_trajectory service'
+                self.addPoseToCartesianTrajectoryClient(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity,2)
+                self.cartesian_pose_client(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity)
+
+            else:
+                self.addPoseToCartesianTrajectoryClient(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity,2)
+
+                #Use action client to move the robot and pause
+                self.cartesian_pose_client(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity)
+                pause = pause + 0
 
             # Send extruder commands to arduino
-            self.arduinoPub.publish("G1 E"+fields[7])
+            self.arduinoPub.publish("G1 E"+fields[8])
+
+            #Pause robot
+            print "Pausing for"
+            print rospy.Duration(pause,0)
+            if not rospy.is_shutdown():
+                rospy.sleep(rospy.Duration(pause,0))
+
+            #Rend reponse to Rhino
+            self.rhinoPub.publish('Motion.\r')
+            self.sentCounter = self.sentCounter+1
+            print 'Sent Counter:%i'%self.sentCounter
 
     #This callback function is used to get responses from Arduino
     def getArduinoResponse(self,message):
@@ -172,11 +223,20 @@ class mainController():
             self.extruderTemperatureFlag = True
 
 ################################## Service and Action Clients #######################################
-    #Client function for addPoseToCartesianTrajectory service
-    def addPoseToCartesianTrajectoryClient(self,targetPose,MaxTranslationVelocity,MaxRotationalVelocity,pause):
+    #Client function for addPoseToCartesianTrajectory service. Orientation in
+    def addPoseToCartesianTrajectoryClient(self,position,orientation,MaxTranslationVelocity,MaxRotationalVelocity,pause):
         try:
-            print targetPose
-            resp1 = self.addPoseToCartesianTrajectory(targetPose.X,targetPose.Y,targetPose.Z,targetPose.ThetaX,targetPose.ThetaY,targetPose.ThetaZ,MaxTranslationVelocity,MaxRotationalVelocity)
+            JtoG = self.RhinoToJacoTransformation(position,orientation)
+            position =  homogeneous.translation_from_matrix(JtoG)
+            orientation = homogeneous.quaternion_from_matrix(JtoG)
+            orientation = self.Quaternion2EulerXYZ(orientation)
+
+            #print "Requested pose = "
+            print position
+            print orientation
+
+            resp1 = self.addPoseToCartesianTrajectory(position[0],position[1],position[2],orientation[0],orientation[1],orientation[2],MaxTranslationVelocity,MaxRotationalVelocity) #self.addPoseToCartesianTrajectory(targetPose.X,targetPose.Y,targetPose.Z,targetPose.ThetaX,targetPose.ThetaY,targetPose.ThetaZ,MaxTranslationVelocity,MaxRotationalVelocity)
+
             #print resp1
 
             self.rhinoPub.publish('Motion.\r')
@@ -224,45 +284,66 @@ class mainController():
         except rospy.ServiceException, e:
             print "Service call failed: %s"%e
 
+    ## End effector offset Service Client
+    def offsetClient(self):
+        try:
+            status = 1
+            response = self.offsetService(status,self.offset)
+            print response
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e
+
+
 
 #################################### Methods ###############################################
     #This function is used to control Jaco and Extruder when testing using a text file.
-    #Send the target position to add_pose_to_Cartesian_trajectory. The fields of text file are: (0,X,Y,Z,Rx,Ry,Rz,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
+    #Send the target position to add_pose_to_Cartesian_trajectory. The fields of text file are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
     def commandJacoTextFile(self):
-        file = open(self.packagePath+'/scripts/pointlog(1).txt')
+        file = open(self.packagePath+'/scripts/multi-points.txt')
         line = file.readline()
+        #print line
         while line and not rospy.is_shutdown():
             line = line.strip()
             fields = line.split(',')
-            if len(fields) == 12:
-                print fields
-                self.targetPose.X = self.newOrigin[0]+float(fields[2])/1000
-                self.targetPose.Y = self.newOrigin[1]+float(fields[1])/1000
-                self.targetPose.Z = self.newOrigin[2]+float(fields[3])/1000
-                self.targetPose.ThetaX = self.newOrigin[3]+float(fields[4])*3.14/180
-                self.targetPose.ThetaY = self.newOrigin[4]+float(fields[5])*3.14/180
-                self.targetPose.ThetaZ = self.newOrigin[5]+float(fields[6])*3.14/180
-                pause = int (fields[9])
-                MaxTranslationVelocity = float(fields[10])/1000
-                MaxRotationalVelocity = float(fields[10])/1000
+            if len(fields) == 13:
+                #print fields
+                position = [-1*float(fields[1])/1000, -1*float(fields[2])/1000, -1*float(fields[3])/1000]
+                #print position
+                #self.targetPose.Y = self.newOrigin[1]+float(fields[2])/1000
+                #self.targetPose.Z = self.newOrigin[2]+float(fields[3])/1000
+                #self.targetPose.ThetaX = self.newOrigin[3]+float(fields[4])*3.14/180
+                #self.targetPose.ThetaY = self.newOrigin[4]+float(fields[5])*3.14/180
+                #self.targetPose.ThetaZ = self.newOrigin[5]+float(fields[6])*3.14/180
+                orientation = [float(fields[4]),float(fields[5]),float(fields[6]),float(fields[7])]
+                #print orientation
+                pause = int (fields[10])
+                MaxTranslationVelocity = float(fields[11])/1000
+                MaxRotationalVelocity = float(fields[11])/1000
+
+                # Send cooling commands to arduino
+                if int(fields[9]) == 1:
+                    self.arduinoPub.publish("M106 S1")
+                else:
+                    self.arduinoPub.publish("M106 S0")
+
+
+
 
                 if pause == 0:
                     #Add targetPose to robot trajectory using the service
                     #print 'Requesting add_pose_to_Cartesian_trajectory service'
-                    self.addPoseToCartesianTrajectoryClient(self.targetPose,MaxTranslationVelocity,MaxRotationalVelocity,pause)
-                else:
-                    #Use action client to move the robot and pause
-                    self.cartesian_pose_client([self.targetPose.X,self.targetPose.Y,self.targetPose.Z],[self.targetPose.ThetaX,self.targetPose.ThetaY,self.targetPose.ThetaZ],MaxTranslationVelocity,MaxRotationalVelocity)
-                    pause = pause + 2
+                    self.addPoseToCartesianTrajectoryClient(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity,2)
+                    self.cartesian_pose_client(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity)
 
-                # Send cooling commands to arduino
-                if int(fields[8]) == 1:
-                    self.arduinoPub.publish("M108 S1")
                 else:
-                    self.arduinoPub.publish("M108 S0")
+                    self.addPoseToCartesianTrajectoryClient(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity,2)
+
+                    #Use action client to move the robot and pause
+                    self.cartesian_pose_client(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity)
+                    pause = pause + 0
 
                 # Send extruder commands to arduino
-                self.arduinoPub.publish("G1 E"+fields[7])
+                self.arduinoPub.publish("G1 E"+fields[8])
 
                 #Pause robot
                 print "Pausing for"
@@ -291,6 +372,31 @@ class mainController():
         Q_ = [qx_, qy_, qz_, qw_]
         return Q_
 
+    def QuaternionNorm(self,Q_raw):
+        qx_temp,qy_temp,qz_temp,qw_temp = Q_raw[0:4]
+        qnorm = math.sqrt(qx_temp*qx_temp + qy_temp*qy_temp + qz_temp*qz_temp + qw_temp*qw_temp)
+        qx_ = qx_temp/qnorm
+        qy_ = qy_temp/qnorm
+        qz_ = qz_temp/qnorm
+        qw_ = qw_temp/qnorm
+        Q_normed_ = [qx_, qy_, qz_, qw_]
+        return Q_normed_
+
+
+    def Quaternion2EulerXYZ(self,Q_raw):
+        Q_normed = self.QuaternionNorm(Q_raw)
+        qx_ = Q_normed[0]
+        qy_ = Q_normed[1]
+        qz_ = Q_normed[2]
+        qw_ = Q_normed[3]
+
+        tx_ = math.atan2((2 * qw_ * qx_ - 2 * qy_ * qz_), (qw_ * qw_ - qx_ * qx_ - qy_ * qy_ + qz_ * qz_))
+        ty_ = math.asin(2 * qw_ * qy_ + 2 * qx_ * qz_)
+        tz_ = math.atan2((2 * qw_ * qz_ - 2 * qx_ * qy_), (qw_ * qw_ + qx_ * qx_ - qy_ * qy_ - qz_ * qz_))
+        EulerXYZ_ = [tx_,ty_,tz_]
+        return EulerXYZ_
+
+
 
     #Heat Extruder to desired temperature
     def heatExtruder(self):
@@ -312,21 +418,22 @@ class mainController():
     def RhinoToJacoTransformation(self,positionRhino,quaternionRhino):
         #homogeneous transformation from Rhino to Extruder
         RtoE = homogeneous.concatenate_matrices(homogeneous.translation_matrix(positionRhino),homogeneous.quaternion_matrix(quaternionRhino))
-        print 'RtoE='
-        print RtoE
+        #print 'RtoE='
+        #print RtoE
 
         #Premultiply with Jaco to Rhino and Postmultiply with Extruder to Gripper
         JtoG = homogeneous.concatenate_matrices(self.JtoR, RtoE, self.EtoG)
-        print 'JtoG='
-        print JtoG
+        #print 'JtoG='
+        #print JtoG
         #Convert homogeneous matrix to Quaternions and Positions
         return JtoG
 
+    # Calculate transformation matrices for Jaco to Rhino and End-Effector to Gripper frames
     def RhinoToJacoTransformationMatrix(self):
-        self.JtoR = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.newOrigin), homogeneous.euler_matrix(np.pi,0,np.pi/2,'rxyz'))
+        self.JtoR = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.jacoToRhino), homogeneous.euler_matrix(np.pi,0,np.pi/2,'rxyz'))
         print 'JtoR='
         print self.JtoR
-        self.EtoG = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.extruderToGripper),homogeneous.euler_matrix(0,np.pi/2,-np.pi/2,'rxyz'))
+        self.EtoG = homogeneous.euler_matrix(0,np.pi/2,-np.pi/2,'rxyz')
         print 'EtoG='
         print self.EtoG
 
@@ -339,6 +446,6 @@ if __name__ =='__main__':
 
     try:
         brain = mainController()
-        
+
     except rospy.ROSInterruptException:
         pass
