@@ -15,8 +15,8 @@ Terminal 2: rostopic pub /extruder std_msgs/String "M104 S20"
 ```
 
 ## Pump
-rostopic pub /extruder std_msgs/String "M108 S0"
-rostopic pub /extruder std_msgs/String "M108 S1"
+rostopic pub /extruder std_msgs/String "M106 S0"
+rostopic pub /extruder std_msgs/String "M106 S1"
 
 ## Procedure to run JACO2 using ROS Laptop and Rhino Plugin (on a Windows PC):
 Ensure that the ROS Laptop and Windows PC are connected to the same network *(TP-LINK_AP_F1_CE)*
@@ -55,7 +55,7 @@ Example subscriber: http://wiki.ros.org/rosserial_arduino/Tutorials/Blink
 ```
 Terminal 1: roscore
 Terminal 2: rosrun rosserial_python serial_node.py /dev/ttyACM0
-Terminal 3: rostopic pub /extruder std_msgs/String "G1 E20"
+Terminal 3: rostopic pub /extruder std_msgs/String "G1 E5"
 Terminal 4: rostopic echo /chatter
 ```
 
@@ -67,4 +67,13 @@ rostopic pub /extruder std_msgs/String "M104 S270"
 **Get temperature of extruder (on /chatter topic):**
 ```
 rostopic pub /extruder std_msgs/String "M114"
+```
+
+## Kinova Demo testing
+rosrun kinova_demo pose_action_client.py -v -r j2s7s300 mdeg -- 0.01 0 0 0 10 10
+
+## Jaco2 with MoveIt
+```
+Terminal 1: roslaunch kinova_bringup kinova_robot.launch kinova_robotType:=j2s7s300
+Terminal 2: roslaunch j2s7s300_moveit_config j2s7s300_demo.launch
 ```
