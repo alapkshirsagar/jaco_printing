@@ -1,0 +1,9 @@
+<launch>
+
+  <!--<include file="$(find j2s7s300_moveit_config)/launch/j2s7s300_demo.launch"/>-->
+
+  <node name="jaco2moveit" pkg="jaco_printing" type="jaco2moveit.py" respawn="false" output="screen">
+    <remap from="/joint_states" to="/j2s7s300_driver/out/joint_state"/>
+  </node>
+
+</launch>
