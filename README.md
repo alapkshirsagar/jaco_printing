@@ -73,7 +73,11 @@ rostopic pub /extruder std_msgs/String "M114"
 rosrun kinova_demo pose_action_client.py -v -r j2s7s300 mdeg -- 0.01 0 0 0 10 10
 
 ## Jaco2 with MoveIt
+There are two ways of controlling Jaco2 with MoveIt.
+1. Move to one Cartesian Pose at a time ('moveToPose' method in jaco2moveit.py)
+2. Move along a Cartesian Trajectory ('moveTrajectory' method in jaco2moveit.py')
 ```
 Terminal 1: roslaunch kinova_bringup kinova_robot.launch kinova_robotType:=j2s7s300
 Terminal 2: roslaunch j2s7s300_moveit_config j2s7s300_demo.launch
+Terminal 3: roslaunch jaco_printing jaco2moveit.launch
 ```
