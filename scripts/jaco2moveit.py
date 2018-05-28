@@ -128,10 +128,13 @@ class jaco2moveit():
         #group.go(wait=True)
 
     def moveTrajectory(self):
+    ## Set a scaling factor for reducing the maximum joint velocity. Allowed values are in (0,1].
+        self.group.set_max_velocity_scaling_factor(0.5)
     ## We want the cartesian path to be interpolated at a resolution of 1 mm
     ## which is why we will specify 0.001 as the eef_step in cartesian
     ## translation.  We will specify the jump threshold as 0.0, effectively
     ## disabling it.
+    
         (plan3, fraction) = self.group.compute_cartesian_path(
                            self.waypoints,   # waypoints to follow
                            0.001,        # eef_step
