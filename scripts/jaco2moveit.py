@@ -148,6 +148,8 @@ class jaco2moveit():
         #group.go(wait=True)
 
     def moveTrajectory(self):
+    ## Set a scaling factor for reducing the maximum joint velocity. Allowed values are in (0,1].
+        self.group.set_max_velocity_scaling_factor(0.5)
     ## We want the cartesian path to be interpolated at a resolution of 1 mm
     ## which is why we will specify 0.001 as the eef_step in cartesian
     ## translation.  We will specify the jump threshold as 0.0, effectively
@@ -160,15 +162,15 @@ class jaco2moveit():
                            0.001,        # eef_step
                            0.0) # jump_threshold
         self.group.execute(plan3)
-        
-        
+
+
         #print plan3
         rospy.sleep(1)
-        
+
         ptPos = plan3.joint_trajectory.points[-1].positions
         print "=================================="
         print "Last point of the current trajectory: "
-       
+
         for i in range (len(ptPos)):
             tempPos = ptPos[i]*180/3.14
             if tempPos < 0:
@@ -180,7 +182,7 @@ class jaco2moveit():
         # in degree
         print jointData
         print "\n"
-        
+
         # in radians
         #for i in range (len(jointState)-3):
         #    print "joint: " + str(i+1) + ": " + str(jointState[i])
