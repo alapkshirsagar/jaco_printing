@@ -108,8 +108,15 @@ class mainController():
         trajectory_status_service = '/j2s7s300_driver/in/trajectory_status'
         self.trajectoryStatusService = rospy.ServiceProxy(trajectory_status_service, TrajectoryStatus)
         print 'Waiting for TrajectoryStatus service'
-        rospy.wait_for_service(offset_service)
+        rospy.wait_for_service(trajectory_status_service)
         print 'TrajectoryStatus service server connected'
+
+        #Service for clearing all trajectories in Robot's FIFO
+        clear_trajectories_service = 'j2s7s300_driver/in/clear_trajectories'
+        self.clearTrajectoriesService = rospy.ServiceProxy(clear_trajectories_service, ClearTrajectories)
+        print 'Waiting for ClearTrajectories service'
+        rospy.wait_for_service(clear_trajectories_service)
+        print 'ClearTrajectories service server connected'
 
 
 
@@ -127,6 +134,9 @@ class mainController():
         ## Set offset
         self.offsetClient()
         rospy.sleep(1.0)
+
+        ## Clear Trajectories
+        self.clearTrajectoriesClient()
 
         # Move arm up from home position by 10cm
         #self.cartesian_pose_client([self.homePosition[0],self.homePosition[1],self.homePosition[2]+0.1],[self.homePosition[3],self.homePosition[4],self.homePosition[5]],self.MaxTranslationVelocity,self.MaxRotationalVelocity);
@@ -325,6 +335,14 @@ class mainController():
         except rospy.ServiceException, e:
             print "Service call failed: %s"%e
 
+    ## Clear Trajectories Service client
+    def clearTrajectoriesClient(self):
+        try:
+            response = self.clearTrajectoriesService()
+            print response
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e
+
 
 
 #################################### Methods ###############################################
@@ -349,8 +367,8 @@ class mainController():
                 orientation = [float(fields[4]),float(fields[5]),float(fields[6]),float(fields[7])]
                 #print orientation
                 pause = int (fields[10])
-                MaxTranslationVelocity = float(fields[11])/3000
-                MaxRotationalVelocity = float(fields[11])/3000
+                MaxTranslationVelocity = float(fields[11])/1000
+                MaxRotationalVelocity = float(fields[11])/1000
 
                 # Send cooling commands to arduino
                 if int(fields[9]) == 1:
@@ -370,8 +388,10 @@ class mainController():
                 else:
                     self.addPoseToCartesianTrajectoryClient(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity,0.0)
                     self.addPoseToCartesianTrajectoryClient(position,orientation,MaxTranslationVelocity,MaxRotationalVelocity,pause)
-                    while (self.trajectoryStatusClient() > 0 and not rospy.is_shutdown()):
-                        rospy.sleep(0.1)
+                    startTime = rospy.get_rostime()
+                while (self.trajectoryStatusClient() > 0 and not rospy.is_shutdown() and (rospy.get_rostime()-startTime < rospy.Duration.from_sec(pause + 2.0))):
+                    rospy.sleep(0.1)
+                self.clearTrajectoriesClient()
 
 
 

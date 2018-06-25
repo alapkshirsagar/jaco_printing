@@ -4,6 +4,7 @@
 
   <node name="jaco2moveit" pkg="jaco_printing" type="jaco2moveit.py" respawn="false" output="screen">
     <remap from="/joint_states" to="/j2s7s300_driver/out/joint_state"/>
+    <rosparam file="$(find jaco_printing)/config/taskParameters.yaml" command="load" />
   </node>
 
 </launch>
