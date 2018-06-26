@@ -81,3 +81,47 @@ Terminal 1: roslaunch kinova_bringup kinova_robot.launch kinova_robotType:=j2s7s
 Terminal 2: roslaunch j2s7s300_moveit_config j2s7s300_demo.launch
 Terminal 3: roslaunch jaco_printing jaco2moveit.launch
 ```
+
+### Ubuntu Laptop (ROS):
+```
+Terminal 1:
+export ROS_MASTER_URI=http://192.168.43.246:11311
+export ROS_IP=192.168.43.246
+cd catkin_ws_kinova
+source devel/setup.bash
+roslaunch kinova_bringup kinova_robot.launch kinova_robotType:=j2s7s300
+
+Terminal 2:
+export ROS_IP=192.168.43.246
+cd catkin_ws_kinova
+source devel/setup.bash
+rosrun rosserial_python serial_node.py /dev/ttyACM0
+
+Terminal 3:
+cd catkin_ws_kinova
+source devel/setup.bash
+export ROS_IP=192.168.43.246
+roslaunch j2s7s300_moveit_config j2s7s300_demo.launch
+
+Terminal 4:
+cd catkin_ws_kinova
+source devel/setup.bash
+export ROS_IP=192.168.43.246
+roslaunch jaco_printing jaco2moveit.launch
+
+Terminal 5 (for testing):
+export ROS_IP=192.168.43.246
+rostopic pub /command std_msgs/String '0,8.02,-29.94,150,0,0,0,1,1,0,0, 80, 9'
+
+```
+
+### Joint Position Control
+```
+rosrun kinova_demo joints_action_client.py -v -r j2s7s300 degree -- 0 0 0 0 0 0 0
+```
+
+Joint Angles for Origin: [95.6198272705,167.071685791,179.600875854,80.4585952759,13.7654829025,157.414764404,167.328979492]
+
+```
+rosrun kinova_demo joints_action_client.py -v j2s7s300 degree -- 95.6198272705 167.071685791 179.600875854 80.4585952759 13.7654829025 157.414764404 167.328979492
+```

@@ -26,7 +26,7 @@ class jaco2moveit():
     jointState = []
     def jointcallback(msg,joints):
         global jointData
-        jointData = joints
+        jointData = [joints.joint1,joints.joint2,joints.joint3,joints.joint4,joints.joint5,joints.joint6,joints.joint7]
 
     def jointstatecallback(msg,joints):
         global jointState
@@ -36,7 +36,7 @@ class jaco2moveit():
             """Variables"""
             ##Home Position for Jaco
             self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit md
-            self.newOrigin = [-0.032+0.01,-0.55+0.01-0.102,0.45+0.1+0.02,0,0,0]
+            self.newOrigin = [-0.032+0.01,-0.55+0.01-0.102,0.45+0.1+0.008,0,0,0]
             self.jacoToRhino = [self.newOrigin[0],self.newOrigin[1],self.newOrigin[2]]
 
             ##Target pose for commanding the robot
@@ -49,6 +49,9 @@ class jaco2moveit():
             self.targetPose.orientation.y = Orientation[1]
             self.targetPose.orientation.z = Orientation[2]
             self.targetPose.orientation.w = Orientation[3]
+
+            ## Maximum velocity. This number is used to get velocity scaling factor. The robot will not move by this exact velocity
+            self.MaxTranslationVelocity = 1
 
             ## Trajectory for commanding the robot
             self.waypoints = []
@@ -67,6 +70,9 @@ class jaco2moveit():
             self.sub_jointState = rospy.Subscriber('/j2s7s300_driver/out/joint_state', JointState, self.jointstatecallback)
             #Topic for getting response from Arduino
             rospy.Subscriber('/chatter',String, self.getArduinoResponse)
+            #Topic for getting commands from RhinoPlugin
+            rospy.Subscriber('/command',String, self.getRhinoCommands)
+
 
 
 ######################### Publishers #######################################################
@@ -249,9 +255,7 @@ class jaco2moveit():
         print "\n"
 
 
-    def moveTrajectory(self):
-    ## Set a scaling factor for reducing the maximum joint velocity. Allowed values are in (0,1].
-        self.group.set_max_velocity_scaling_factor(1.0)
+    def moveTrajectory(self,velocity_scaling_factor):
     ## We want the cartesian path to be interpolated at a resolution of 1 mm
     ## which is why we will specify 0.001 as the eef_step in cartesian
     ## translation.  We will specify the jump threshold as 0.0, effectively
@@ -263,7 +267,9 @@ class jaco2moveit():
                            self.waypoints,   # waypoints to follow
                            0.001,        # eef_step
                            0.0) # jump_threshold
-        self.group.execute(plan3)
+        #Retime the trajectory to apply velocity_scaling_factor
+        plan4 = self.group.retime_trajectory(self.robot.get_current_state(),plan3,velocity_scaling_factor)
+        self.group.execute(plan4)
 
 
         #print plan3
@@ -278,7 +284,7 @@ class jaco2moveit():
         angle_set = list()
 
         for i in range (len(ptPos)):
-            tempPos = ptPos[i]*180/3.14
+            tempPos = ptPos[i]*180/np.pi + int(round((jointData[i] - ptPos[i]*180/np.pi)/(360)))*360
             angle_set.append(tempPos)
             #if tempPos < 0:
                 #tempPos += 360
@@ -371,7 +377,7 @@ class jaco2moveit():
     #Send the target position to moveitTrajectoryPlanner.
     #The fields of text file are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
     def commandJacoTextFile(self):
-        file = open(self.packagePath+'/scripts/multi-points_p1.txt')
+        file = open(self.packagePath+'/scripts/sample_points.txt')
         line = file.readline()
         #print line
         while line and not rospy.is_shutdown():
@@ -382,8 +388,9 @@ class jaco2moveit():
                 position = [-1*float(fields[1])/1000, -1*float(fields[2])/1000, -1*float(fields[3])/1000]
                 orientation = [float(fields[4]),float(fields[5]),float(fields[6]),float(fields[7])]
                 pause = int (fields[10])
-                MaxTranslationVelocity = float(fields[11])/3000
-                MaxRotationalVelocity = float(fields[11])/3000
+                MaxTranslationVelocity = float(fields[11])
+                MaxRotationalVelocity = float(fields[11])
+                velocity_scaling_factor = MaxTranslationVelocity/self.MaxTranslationVelocity
 
                 ##Convert poses to Robot's frame
                 JtoG = self.RhinoToJacoTransformation(position,orientation)
@@ -410,7 +417,7 @@ class jaco2moveit():
 
                 ## Move arm when pause is not zero
                 if pause != 0:
-                    self.moveTrajectory()
+                    self.moveTrajectory(velocity_scaling_factor)
 
                 # Send extruder commands to arduino
                 self.arduinoPub.publish("G1 E"+fields[8])
@@ -424,6 +431,66 @@ class jaco2moveit():
                     print 'Goodbye!'
             line = file.readline()
         file.close()
+
+    #This callback function is used to control Jaco and Extruder when Rhino Plugin in connected.
+    #Send the target position to add_pose_to_Cartesian_trajectory. The fields of 'message' are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
+    def getRhinoCommands(self, message):
+        self.receivedCounter = self.receivedCounter+1
+        print 'Received Counter:%i'%self.receivedCounter
+        fields = message.data.split(',')
+        if len(fields) == 13:
+            # print fields
+            position = [-1*float(fields[1])/1000, -1*float(fields[2])/1000, -1*float(fields[3])/1000]
+            orientation = [float(fields[4]),float(fields[5]),float(fields[6]),float(fields[7])]
+            pause = int (fields[10])
+            MaxTranslationVelocity = float(fields[11])
+            MaxRotationalVelocity = float(fields[11])
+            velocity_scaling_factor = MaxTranslationVelocity/self.MaxTranslationVelocity
+
+
+            ##Convert poses to Robot's frame
+            JtoG = self.RhinoToJacoTransformation(position,orientation)
+            position =  homogeneous.translation_from_matrix(JtoG)
+            orientation = homogeneous.quaternion_from_matrix(JtoG)
+
+            ##Add pose to waypoints
+            wpose = geometry_msgs.msg.Pose()
+            wpose.position.x = position[0]
+            wpose.position.y = position[1]
+            wpose.position.z = position[2]
+            wpose.orientation.x = orientation[0]
+            wpose.orientation.y = orientation[1]
+            wpose.orientation.z = orientation[2]
+            wpose.orientation.w = orientation[3]
+            self.waypoints.append(copy.deepcopy(wpose))
+            #self.moveToPose(wpose) ## Use pose move interface
+
+            # Send cooling commands to arduino
+            if int(fields[9]) == 1:
+                self.arduinoPub.publish("M106 S1")
+            else:
+                self.arduinoPub.publish("M106 S0")
+
+            ## Move arm when pause is not zero
+            if pause != 0:
+                self.moveTrajectory(velocity_scaling_factor)
+
+            # Send extruder commands to arduino
+            self.arduinoPub.publish("G1 E"+fields[8])
+
+            #Pause robot
+            print "Pausing for"
+            print rospy.Duration(pause,0)
+            if not rospy.is_shutdown():
+                rospy.sleep(rospy.Duration(pause,0))
+            if rospy.is_shutdown():
+                print 'Goodbye!'
+
+            #Rend reponse to Rhino
+            self.rhinoPub.publish('Motion.\r')
+            self.sentCounter = self.sentCounter+1
+            print 'Sent Counter:%i'%self.sentCounter
+
 
 
 
