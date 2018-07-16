@@ -494,7 +494,7 @@ class mainController():
         self.JtoR = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.jacoToRhino), homogeneous.euler_matrix(np.pi,0,np.pi/2,'rxyz'))
         print 'JtoR='
         print self.JtoR
-        self.EtoG = homogeneous.euler_matrix(0,np.pi/2,-np.pi/2,'rxyz')
+        self.EtoG = homogeneous.euler_matrix(0,-np.pi/2,np.pi/2,'rxyz')
         print 'EtoG='
         print self.EtoG
 

@@ -6,13 +6,12 @@ import rospkg
 import moveit_commander
 import moveit_msgs.msg
 import geometry_msgs.msg
-import tf
 import math
 from std_msgs.msg import String
 from tf import transformations as homogeneous
 import numpy as np
-from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
 from kinova_msgs.msg import *
+from kinova_msgs.srv import *
 from sensor_msgs.msg import JointState
 import actionlib
 
@@ -36,8 +35,11 @@ class jaco2moveit():
             """Variables"""
             ##Home Position for Jaco
             self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit md
-            self.newOrigin = [-0.032+0.01,-0.55+0.01-0.102,0.45+0.1+0.008,0,0,0]
+            self.newOrigin = [0,-0.5,0.55,0,0,0] #In Jaco base frame. JtoR
             self.jacoToRhino = [self.newOrigin[0],self.newOrigin[1],self.newOrigin[2]]
+
+            self.offset = [-0.102,0,0.105] # Geometrical distance between gripper and extruder. In Extruder frame.
+
 
             ##Target pose for commanding the robot
             self.targetPose = geometry_msgs.msg.Pose()
@@ -51,7 +53,7 @@ class jaco2moveit():
             self.targetPose.orientation.w = Orientation[3]
 
             ## Maximum velocity. This number is used to get velocity scaling factor. The robot will not move by this exact velocity
-            self.MaxTranslationVelocity = 1
+            self.MaxTranslationVelocity = 100
 
             ## Trajectory for commanding the robot
             self.waypoints = []
@@ -59,11 +61,15 @@ class jaco2moveit():
             self.receivedCounter = 0 #Keep count of messages received from RhinoPlugin
             self.sentCounter = 0 #Keep count of responses sent to RhinoPlugin
             self.extruderTemperatureFlag = False #True if "CurrentTemperature" message is received
+            self.touchPlatformFlag = False #True if "TouchPlatform" message is received
             self.extruderTemperature = 0 #Temperature of extruder
             self.extruderDesiredTemperature = 270 #Desired temperature of extruder
 
             self.rospack = rospkg.RosPack()
             self.packagePath = self.rospack.get_path('jaco_printing') #Get directory path to jaco_printing package
+
+            self.armStopped = False #To track whether arm was stopped in emergency mode
+
 
 ######################### Subscribers ######################################################
             self.sub_jointAngle = rospy.Subscriber('/j2s7s300_driver/out/joint_angles', JointAngles, self.jointcallback)
@@ -72,6 +78,11 @@ class jaco2moveit():
             rospy.Subscriber('/chatter',String, self.getArduinoResponse)
             #Topic for getting commands from RhinoPlugin
             rospy.Subscriber('/command',String, self.getRhinoCommands)
+            #Topic for getting joint torques
+            #rospy.Subscriber('/j2s7s300_driver/out/joint_torques', JointAngles,self.monitorJointTorques)
+            #Topic for getting cartesian force on end effector
+            rospy.Subscriber('/j2s7s300_driver/out/tool_wrench', geometry_msgs.msg.WrenchStamped, self.monitorToolWrench)
+
 
 
 
@@ -83,13 +94,37 @@ class jaco2moveit():
             self.arduinoPub = rospy.Publisher('/extruder', String, queue_size=10)
 
 
-######################### Action Client ##################################################
+######################### Actions ##################################################
             #Action Client for joint control
             action_address = '/j2s7s300_driver/joints_action/joint_angles'
             self.jointActionClient = actionlib.SimpleActionClient(action_address, kinova_msgs.msg.ArmJointAnglesAction)
             print 'Waiting for ArmJointAnglesAction server...'
             self.jointActionClient.wait_for_server()
             print 'ArmJointAnglesAction Server Connected'
+
+######################## Services #################################################
+            # Service for homing the arm
+            home_arm_service = '/j2s7s300_driver/in/home_arm'
+            self.homeArmService = rospy.ServiceProxy(home_arm_service, HomeArm)
+            print 'Waiting for Stop service'
+            rospy.wait_for_service(home_arm_service)
+            print 'Stop service server connected'
+
+            #Service for emergency stop
+            emergency_service = '/j2s7s300_driver/in/stop'
+            self.emergencyStop = rospy.ServiceProxy(emergency_service, Stop)
+            print 'Waiting for Stop service'
+            rospy.wait_for_service(emergency_service)
+            print 'Stop service server connected'
+
+            #Service for restarting the arm
+            start_service = '/j2s7s300_driver/in/start'
+            self.startArm = rospy.ServiceProxy(start_service, Start)
+            print 'Waiting for Start service'
+            rospy.wait_for_service(start_service)
+            print 'Start service server connected'
+
+
 
 
 ####################################################################################
@@ -104,6 +139,16 @@ class jaco2moveit():
             ## Instantiate a PlanningSceneInterface object.  This object is an interface
             ## to the world surrounding the robot.
             self.scene = moveit_commander.PlanningSceneInterface()
+
+            rospy.sleep(2.0)
+
+            ## Add a barrier to prevent the robot from colliding with human
+            p = geometry_msgs.msg.PoseStamped()
+            p.header.frame_id = self.robot.get_planning_frame()
+            p.pose.position.x = self.newOrigin[0]
+            p.pose.position.y = self.newOrigin[1]-0.5
+            p.pose.position.z = self.newOrigin[2]
+            self.scene.add_box("barrier", p, (1, 0.1, 1))
 
             ## Instantiate a MoveGroupCommander object.  This object is an interface
             ## to one group of joints.  In this case the group is the joints in the left
@@ -146,6 +191,12 @@ class jaco2moveit():
             ## Calculate transformation Matrices
             self.RhinoToJacoTransformationMatrix()
 
+            ## Start Arm
+            self.startArmClient() #Remove Emergency Stop flag
+
+            ## Home arm
+            #self.homeArmClient()
+
             if rospy.get_param('~moveArm'):
                 # Continue with rest of the procedure
                 if rospy.get_param('~rhinoPlugin'):
@@ -159,20 +210,109 @@ class jaco2moveit():
 
 
 ####################Callback functions#########################################################
-    #This callback function is used to get responses from Arduino
-    def getArduinoResponse(self,message):
-        #Update temperature of extruder if previous message was "CurrentTemperature"
+
+    # This callback function monitors the Joint Torques and stops the current execution if the Joint Torques exceed certain value
+    def monitorJointTorques(self,torques):
+        if abs(torques.joint1) > 1:
+            self.emergencyStopClient() #Stop arm driver
+            rospy.sleep(1.0)
+            #self.group.stop() #Stop moveit execution
+
+    # This callback function monitors the Joint Wrench and stops the current
+    # execution if the Joint Wrench exceeds certain value
+    def monitorToolWrench(self, wrenchStamped):
+        toolwrench = abs(wrenchStamped.wrench.force.x**2 + wrenchStamped.wrench.force.y**2 + wrenchStamped.wrench.force.z**2)
+        #print toolwrench
+        if toolwrench > 100:
+            self.emergencyStopClient()  # Stop arm driver
+
+
+    # This callback function is used to get responses from Arduino
+    def getArduinoResponse(self, message):
+        # Update temperature of extruder if previous message was
+        # "CurrentTemperature"
+        print message.data
         if self.extruderTemperatureFlag:
             self.extruderTemperature = float(message.data)
             print self.extruderTemperature
             self.extruderTemperatureFlag = False
         if message.data == "CurrentTemperature":
             self.extruderTemperatureFlag = True
+        if message.data == "TouchPlatform  1.00":
+            self.touchPlatformFlag = True
+            # If Human has touched the platform get the robot back to home
+            # position
+            print "user touched platform"
+            wpose = geometry_msgs.msg.Pose()
+            position = [0.3,0,0]
+            orientation = [0,0,0,1]
+            ##Convert poses to Robot's frame
+            JtoG = self.RhinoToJacoTransformation(position, orientation)
+            position = homogeneous.translation_from_matrix(JtoG)
+            orientation = homogeneous.quaternion_from_matrix(JtoG)
+            wpose.position.x = position[0]
+            wpose.position.y = position[1]
+            wpose.position.z = position[2]
+            wpose.orientation.x = orientation[0]
+            wpose.orientation.y = orientation[1]
+            wpose.orientation.z = orientation[2]
+            wpose.orientation.w = orientation[3]
+            self.waypoints.append(copy.deepcopy(wpose))
+
+            self.moveTrajectory(0.5,0)  # Use pose move interface
+            self.arduinoPub.publish("M18")
+        elif message.data == "TouchPlatform  0.00":
+            self.touchPlatformFlag = False
+
+        # Send angle of platform to RhinoPlugin
+        fields = message.data.split(':')
+        if fields[0] == 'Angle':
+            self.rhinoPub.publish('Rot: ' + fields[1])
+
+
+
+#################### Service Clients ##################################################
+    ## Home arm service client
+    def homeArmClient(self):
+        try:
+            status = 0
+            response = self.homeArmService()
+            print response
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e
+
+    ## Emergency Stop Service Client
+    def emergencyStopClient(self):
+        try:
+            response = self.emergencyStop()
+            print response
+            self.armStopped = True
+            wpose = geometry_msgs.msg.Pose()
+            wpose.position.x = 300
+            wpose.position.y = 0
+            wpose.position.z = -50
+            wpose.orientation.x = 0
+            wpose.orientation.y = 0
+            wpose.orientation.z = 0
+            wpose.orientation.w = 1
+            self.moveToPose(wpose)  # Use pose move interface
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e
+
+    ## Start Service Client
+    def startArmClient(self):
+        try:
+            response = self.startArm()
+            print response
+            self.armStopped = False
+        except rospy.ServiceException, e:
+            print "Service call failed: %s"%e
+
 
 
 
 ######################################## Methods #######################################
-    #Heat Extruder to desired temperature
+    # Heat Extruder to desired temperature
     def heatExtruder(self):
         r = rospy.Rate(10)
         # Publish desired temperature message for 1second
@@ -207,16 +347,16 @@ class jaco2moveit():
             return None
 
 
-    def moveToPose(self,targetPose):
+    def moveToPose(self, targetPose):
         ## Set a scaling factor for reducing the maximum joint velocity. Allowed values are in (0,1].
-        self.group.set_max_velocity_scaling_factor(1.0)
+        #self.group.set_max_velocity_scaling_factor(1.0)
 
         ## Planning to a Pose goal
         ## ^^^^^^^^^^^^^^^^^^^^^^^
         ## We can plan a motion for this group to a desired pose for the
         ## end-effector
         print "============ Generating plan 1"
-        self.group.set_pose_target(targetPose);
+        self.group.set_pose_target(targetPose)
 
         ## Now, we call the planner to compute the plan
         ## and visualize it if successful
@@ -246,16 +386,14 @@ class jaco2moveit():
             print "data" + str(i+1) + ": " + str(tempPos)
         print "\n"
         self.group.go(wait=True)
-        rospy.sleep(1.0)
         #self.jointActionClientMethod(angle_set)
-        rospy.sleep(1.0)
         print "current joint angle data from encoder:"
         # # in degree
         print jointData
         print "\n"
 
 
-    def moveTrajectory(self,velocity_scaling_factor):
+    def moveTrajectory(self,velocity_scaling_factor, typeOfCurve):
     ## We want the cartesian path to be interpolated at a resolution of 1 mm
     ## which is why we will specify 0.001 as the eef_step in cartesian
     ## translation.  We will specify the jump threshold as 0.0, effectively
@@ -269,11 +407,13 @@ class jaco2moveit():
                            0.0) # jump_threshold
         #Retime the trajectory to apply velocity_scaling_factor
         plan4 = self.group.retime_trajectory(self.robot.get_current_state(),plan3,velocity_scaling_factor)
-        self.group.execute(plan4)
+        print plan4
+
+        self.group.execute(plan4, wait=True)
 
 
         #print plan3
-        rospy.sleep(1)
+        rospy.sleep(0.1)
         print "================================ Moveit's plan ==================="
         print plan3
         print "\n"
@@ -295,9 +435,11 @@ class jaco2moveit():
         # in degree
         print jointData
         print "\n"
-
-        self.jointActionClientMethod(angle_set)
-        rospy.sleep(1)
+        if typeOfCurve in [18,19,20]:
+            print "Bottom Line"
+        else:
+            self.jointActionClientMethod(angle_set)
+        #rospy.sleep(1)
 
         # in radians
         #for i in range (len(jointState)-3):
@@ -351,10 +493,10 @@ class jaco2moveit():
 
     # Calculate transformation matrices for Jaco to Rhino and End-Effector to Gripper frames
     def RhinoToJacoTransformationMatrix(self):
-        self.JtoR = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.jacoToRhino), homogeneous.euler_matrix(np.pi,0,np.pi/2,'rxyz'))
+        self.JtoR = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.jacoToRhino), homogeneous.euler_matrix(0,0,np.pi/2,'rxyz'))
         print 'JtoR='
         print self.JtoR
-        self.EtoG = homogeneous.euler_matrix(0,np.pi/2,0,'rxyz')
+        self.EtoG = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.offset), homogeneous.euler_matrix(0,-np.pi/2,0,'rxyz'))
         print 'EtoG='
         print self.EtoG
 
@@ -417,7 +559,7 @@ class jaco2moveit():
 
                 ## Move arm when pause is not zero
                 if pause != 0:
-                    self.moveTrajectory(velocity_scaling_factor)
+                    self.moveTrajectory(velocity_scaling_factor,typeOfCurve)
 
                 # Send extruder commands to arduino
                 self.arduinoPub.publish("G1 E"+fields[8])
@@ -433,20 +575,27 @@ class jaco2moveit():
         file.close()
 
     #This callback function is used to control Jaco and Extruder when Rhino Plugin in connected.
-    #Send the target position to add_pose_to_Cartesian_trajectory. The fields of 'message' are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
+    #Send the target position to add_pose_to_Cartesian_trajectory. The fields of 'message' are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,TypeOfCurve,Pause,Speed)
     def getRhinoCommands(self, message):
+        self.startArmClient()
+        if message.data[:4] == "M117":
+            # Send platform rotation command to Arduino
+            self.arduinoPub.publish(message)
+
         self.receivedCounter = self.receivedCounter+1
         print 'Received Counter:%i'%self.receivedCounter
         fields = message.data.split(',')
         if len(fields) == 13:
             # print fields
-            position = [-1*float(fields[1])/1000, -1*float(fields[2])/1000, -1*float(fields[3])/1000]
+            position = [float(fields[1])/1000, float(fields[2])/1000, float(fields[3])/1000]
             orientation = [float(fields[4]),float(fields[5]),float(fields[6]),float(fields[7])]
-            pause = int (fields[10])
-            MaxTranslationVelocity = float(fields[11])
-            MaxRotationalVelocity = float(fields[11])
+            typeOfCurve = int(fields[10])
+            pause = int (fields[11])
+            MaxTranslationVelocity = float(fields[12])
+            MaxRotationalVelocity = float(fields[12])
             velocity_scaling_factor = MaxTranslationVelocity/self.MaxTranslationVelocity
-
+            print "Velocity factor :"
+            print velocity_scaling_factor
 
             ##Convert poses to Robot's frame
             JtoG = self.RhinoToJacoTransformation(position,orientation)
@@ -465,28 +614,42 @@ class jaco2moveit():
             self.waypoints.append(copy.deepcopy(wpose))
             #self.moveToPose(wpose) ## Use pose move interface
 
+
+            ## Move arm when pause is not zero
+            if pause != 0:
+                # Send extruder commands to arduino
+                self.arduinoPub.publish("G1 E"+fields[8])
+                rospy.sleep(0.3)
+                self.moveTrajectory(velocity_scaling_factor,typeOfCurve)
+
+                # Send cooling commands to arduino
+                if int(fields[9]) == 1:
+                    self.arduinoPub.publish("M106 S1")
+                else:
+                    self.arduinoPub.publish("M106 S0")
+
+
+                #Pause robot
+                print "Pausing for"
+                print rospy.Duration(pause,0)
+                if not rospy.is_shutdown():
+                    rospy.sleep(rospy.Duration(pause,0))
+                if rospy.is_shutdown():
+                    print 'Goodbye!'
+
             # Send cooling commands to arduino
             if int(fields[9]) == 1:
                 self.arduinoPub.publish("M106 S1")
             else:
                 self.arduinoPub.publish("M106 S0")
 
-            ## Move arm when pause is not zero
-            if pause != 0:
-                self.moveTrajectory(velocity_scaling_factor)
 
-            # Send extruder commands to arduino
-            self.arduinoPub.publish("G1 E"+fields[8])
+            while self.touchPlatformFlag is True:
+                print 'Waiting for user to release the platform'
+                rospy.sleep(0.1)
 
-            #Pause robot
-            print "Pausing for"
-            print rospy.Duration(pause,0)
-            if not rospy.is_shutdown():
-                rospy.sleep(rospy.Duration(pause,0))
-            if rospy.is_shutdown():
-                print 'Goodbye!'
 
-            #Rend reponse to Rhino
+            # Send reponse to Rhino
             self.rhinoPub.publish('Motion.\r')
             self.sentCounter = self.sentCounter+1
             print 'Sent Counter:%i'%self.sentCounter

@@ -64,6 +64,12 @@ Terminal 4: rostopic echo /chatter
 rostopic pub /extruder std_msgs/String "M104 S270"
 ```
 
+**Cool down the extruder: **
+```
+rostopic pub /extruder std_msgs/String "M104 S20"
+```
+
+
 **Get temperature of extruder (on /chatter topic):**
 ```
 rostopic pub /extruder std_msgs/String "M114"
@@ -109,9 +115,17 @@ source devel/setup.bash
 export ROS_IP=192.168.43.246
 roslaunch jaco_printing jaco2moveit.launch
 
+Terminal 5:
+cd catkin_ws_kinova
+source devel/setup.bash
+export ROS_IP=192.168.43.246
+rosrun jaco_printing jaco2moveit_node2.py
+
 Terminal 5 (for testing):
 export ROS_IP=192.168.43.246
 rostopic pub /command std_msgs/String '0,8.02,-29.94,150,0,0,0,1,1,0,0, 80, 9'
+rostopic pub /command std_msgs/String '0,0,0,0,0,0,0,1,1,0,9,1,80'
+rostopic pub /command std_msgs/String '0,100,0,-150,0.6483,0,0.7614,0,1,0,9,1,80'
 
 ```
 
