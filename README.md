@@ -55,7 +55,7 @@ Example subscriber: http://wiki.ros.org/rosserial_arduino/Tutorials/Blink
 ```
 Terminal 1: roscore
 Terminal 2: rosrun rosserial_python serial_node.py /dev/ttyACM0
-Terminal 3: rostopic pub /extruder std_msgs/String "G1 E5"
+Terminal 3: rostopic pub /extruder std_msgs/String "G1 E5 T2"
 Terminal 4: rostopic echo /chatter
 ```
 
@@ -69,10 +69,19 @@ rostopic pub /extruder std_msgs/String "M104 S270"
 rostopic pub /extruder std_msgs/String "M104 S20"
 ```
 
+**Stop cooling : **
+```
+rostopic pub /extruder std_msgs/String "M106 S0"
+```
 
 **Get temperature of extruder (on /chatter topic):**
 ```
 rostopic pub /extruder std_msgs/String "M114"
+```
+**Get Rotation angle:**
+```
+rostopic pub /extruder std_msgs/String "M16"
+
 ```
 
 ## Kinova Demo testing
@@ -101,7 +110,7 @@ Terminal 2:
 export ROS_IP=192.168.43.246
 cd catkin_ws_kinova
 source devel/setup.bash
-rosrun rosserial_python serial_node.py /dev/ttyACM0
+rosrun rosserial_python serial_node.py _port:=/dev/ttyACM0 _baud:=115200
 
 Terminal 3:
 cd catkin_ws_kinova
@@ -124,8 +133,10 @@ rosrun jaco_printing jaco2moveit_node2.py
 Terminal 5 (for testing):
 export ROS_IP=192.168.43.246
 rostopic pub /command std_msgs/String '0,8.02,-29.94,150,0,0,0,1,1,0,0, 80, 9'
-rostopic pub /command std_msgs/String '0,0,0,0,0,0,0,1,1,0,9,1,80'
+rostopic pub /command std_msgs/String '0,0,0,150,0,0,0,1,1,0,9,1,80'
 rostopic pub /command std_msgs/String '0,100,0,-150,0.6483,0,0.7614,0,1,0,9,1,80'
+rostopic pub /command std_msgs/String '0,0,0,150,0,0,0,1,1,0,9,1,80'
+rostopic pub /extruder std_msgs/String "G1 E10 T2"
 
 ```
 

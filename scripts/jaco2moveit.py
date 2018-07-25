@@ -35,7 +35,7 @@ class jaco2moveit():
             """Variables"""
             ##Home Position for Jaco
             self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit md
-            self.newOrigin = [0,-0.5,0.55,0,0,0] #In Jaco base frame. JtoR
+            self.newOrigin = [-0.064-0.001,-0.5+0.002,0.455-0.003,0,0,0] #In Jaco base frame. JtoR
             self.jacoToRhino = [self.newOrigin[0],self.newOrigin[1],self.newOrigin[2]]
 
             self.offset = [-0.102,0,0.105] # Geometrical distance between gripper and extruder. In Extruder frame.
@@ -53,7 +53,7 @@ class jaco2moveit():
             self.targetPose.orientation.w = Orientation[3]
 
             ## Maximum velocity. This number is used to get velocity scaling factor. The robot will not move by this exact velocity
-            self.MaxTranslationVelocity = 100
+            self.MaxTranslationVelocity = 200
 
             ## Trajectory for commanding the robot
             self.waypoints = []
@@ -188,6 +188,9 @@ class jaco2moveit():
             if rospy.get_param('~heatExtruder'):
                 self.heatExtruder()
 
+            ## Set rotation angle to zero
+            self.arduinoPub.publish("M15")
+
             ## Calculate transformation Matrices
             self.RhinoToJacoTransformationMatrix()
 
@@ -201,6 +204,7 @@ class jaco2moveit():
                 # Continue with rest of the procedure
                 if rospy.get_param('~rhinoPlugin'):
                     #//TODO Call rhino plugin connection
+
                     print "Rhino Plugin needs to be connected"
                 else:
                     print "Rhino plugin not needed"
@@ -231,20 +235,20 @@ class jaco2moveit():
     def getArduinoResponse(self, message):
         # Update temperature of extruder if previous message was
         # "CurrentTemperature"
-        print message.data
-        if self.extruderTemperatureFlag:
-            self.extruderTemperature = float(message.data)
+        print message
+
+        if "CurrentTemperature" in message.data:
+            self.extruderTemperature = float(message.data[18:])
             print self.extruderTemperature
             self.extruderTemperatureFlag = False
-        if message.data == "CurrentTemperature":
-            self.extruderTemperatureFlag = True
         if message.data == "TouchPlatform  1.00":
             self.touchPlatformFlag = True
             # If Human has touched the platform get the robot back to home
             # position
             print "user touched platform"
             wpose = geometry_msgs.msg.Pose()
-            position = [0.3,0,0]
+            self.waypoints = [] # Clean waypoints list
+            position = [0.3,0,0.1]
             orientation = [0,0,0,1]
             ##Convert poses to Robot's frame
             JtoG = self.RhinoToJacoTransformation(position, orientation)
@@ -259,8 +263,9 @@ class jaco2moveit():
             wpose.orientation.w = orientation[3]
             self.waypoints.append(copy.deepcopy(wpose))
 
-            self.moveTrajectory(0.5,0)  # Use pose move interface
-            self.arduinoPub.publish("M18")
+            plan = self.planTrajectory(1,-1, 0)  # Use pose move interface
+            self.moveTrajectory(plan,-1)
+            self.arduinoPub.publish("M18") # Disable platform motor
         elif message.data == "TouchPlatform  0.00":
             self.touchPlatformFlag = False
 
@@ -393,7 +398,7 @@ class jaco2moveit():
         print "\n"
 
 
-    def moveTrajectory(self,velocity_scaling_factor, typeOfCurve):
+    def planTrajectory(self,velocity_scaling_factor, typeOfCurve, extruderLength):
     ## We want the cartesian path to be interpolated at a resolution of 1 mm
     ## which is why we will specify 0.001 as the eef_step in cartesian
     ## translation.  We will specify the jump threshold as 0.0, effectively
@@ -407,20 +412,40 @@ class jaco2moveit():
                            0.0) # jump_threshold
         #Retime the trajectory to apply velocity_scaling_factor
         plan4 = self.group.retime_trajectory(self.robot.get_current_state(),plan3,velocity_scaling_factor)
-        print plan4
+        time = plan4.joint_trajectory.points[-1].time_from_start.secs + plan4.joint_trajectory.points[-1].time_from_start.nsecs/1000000000.0
+        velocity = extruderLength/time
 
-        self.group.execute(plan4, wait=True)
+        while velocity > 5:
+                velocity_scaling_factor = velocity_scaling_factor*0.9
+                (plan3, fraction) = self.group.compute_cartesian_path(
+                                   self.waypoints,   # waypoints to follow
+                                   0.001,        # eef_step
+                                   0.0) # jump_threshold
+                #Retime the trajectory to apply velocity_scaling_factor
+                plan4 = self.group.retime_trajectory(self.robot.get_current_state(),plan3,velocity_scaling_factor)
+                time = plan4.joint_trajectory.points[-1].time_from_start.secs + plan4.joint_trajectory.points[-1].time_from_start.nsecs/1000000000.0
+                velocity = extruderLength/time
+
+        print "Velocity of printing"
+        print velocity
+        #print plan4
+        return plan4
+
+    def moveTrajectory(self, plan, typeOfCurve):
+    ## Move the arm along the trajectory given by plan
+
+        self.group.execute(plan, wait=True)
 
 
         #print plan3
         rospy.sleep(0.1)
-        print "================================ Moveit's plan ==================="
-        print plan3
-        print "\n"
+        #print "================================ Moveit's plan ==================="
+        #print plan3
+        #print "\n"
 
-        ptPos = plan3.joint_trajectory.points[-1].positions
-        print "=================================="
-        print "Last point of the current trajectory: "
+        ptPos = plan.joint_trajectory.points[-1].positions
+        #print "=================================="
+        #print "Last point of the current trajectory: "
         angle_set = list()
 
         for i in range (len(ptPos)):
@@ -428,16 +453,17 @@ class jaco2moveit():
             angle_set.append(tempPos)
             #if tempPos < 0:
                 #tempPos += 360
-            print "data" + str(i+1) + ": " + str(tempPos)
-        print "\n"
+            #print "data" + str(i+1) + ": " + str(tempPos)
+        #print "\n"
 
-        print "current joint angle data from encoder:"
+        #print "current joint angle data from encoder:"
         # in degree
-        print jointData
-        print "\n"
-        if typeOfCurve in [18,19,20]:
-            print "Bottom Line"
-        else:
+        #print jointData
+        #print "\n"
+        #if typeOfCurve in [18,19,20]:
+        #    print "Bottom Line"
+        #else:
+        if typeOfCurve is not -1:
             self.jointActionClientMethod(angle_set)
         #rospy.sleep(1)
 
@@ -530,6 +556,7 @@ class jaco2moveit():
                 position = [-1*float(fields[1])/1000, -1*float(fields[2])/1000, -1*float(fields[3])/1000]
                 orientation = [float(fields[4]),float(fields[5]),float(fields[6]),float(fields[7])]
                 pause = int (fields[10])
+                typeOfCurve = int(fields[10])
                 MaxTranslationVelocity = float(fields[11])
                 MaxRotationalVelocity = float(fields[11])
                 velocity_scaling_factor = MaxTranslationVelocity/self.MaxTranslationVelocity
@@ -559,7 +586,8 @@ class jaco2moveit():
 
                 ## Move arm when pause is not zero
                 if pause != 0:
-                    self.moveTrajectory(velocity_scaling_factor,typeOfCurve)
+                    plan = self.planTrajectory(velocity_scaling_factor, typeOfCurve, float(fields[8]))
+                    #self.moveTrajectory(plan,typeOfCurve)
 
                 # Send extruder commands to arduino
                 self.arduinoPub.publish("G1 E"+fields[8])
@@ -614,13 +642,22 @@ class jaco2moveit():
             self.waypoints.append(copy.deepcopy(wpose))
             #self.moveToPose(wpose) ## Use pose move interface
 
+            ## Extrude extra material at the beginning of a segment
+            if typeOfCurve in (9, 11, 18):
+                self.arduinoPub.publish("G1 E12 T0.5")
+                rospy.sleep(0.5)
 
             ## Move arm when pause is not zero
             if pause != 0:
+                plan = self.planTrajectory(velocity_scaling_factor, typeOfCurve, float(fields[8]))
+                time = plan.joint_trajectory.points[-1].time_from_start.secs + plan.joint_trajectory.points[-1].time_from_start.nsecs/1000000000.0
+                print time
                 # Send extruder commands to arduino
-                self.arduinoPub.publish("G1 E"+fields[8])
+                if fields[8] is not "0.00" and time > 1:
+                    self.arduinoPub.publish("G1 E"+fields[8]+" T"+str(time))
                 rospy.sleep(0.3)
-                self.moveTrajectory(velocity_scaling_factor,typeOfCurve)
+                #Move Arm
+                self.moveTrajectory(plan,typeOfCurve)
 
                 # Send cooling commands to arduino
                 if int(fields[9]) == 1:
