@@ -89,7 +89,7 @@ class userSafety():
     def monitorToolWrench(self, wrenchStamped):
         toolwrench = abs(wrenchStamped.wrench.force.x**2 + wrenchStamped.wrench.force.y**2 + wrenchStamped.wrench.force.z**2)
         print toolwrench
-        if toolwrench > 50:
+        if toolwrench > 100:
             self.emergencyStopClient()  # Stop arm driver
 
 

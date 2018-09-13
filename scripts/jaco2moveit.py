@@ -35,10 +35,11 @@ class jaco2moveit():
             """Variables"""
             ##Home Position for Jaco
             self.homePosition = [0.212322831154, -0.257197618484, 0.509646713734, 1.63771402836, 1.11316478252, 0.134094119072] # default home position of jaco2 in unit md
-            self.newOrigin = [-0.064-0.001,-0.5+0.002,0.455-0.003,0,0,0] #In Jaco base frame. JtoR
+            self.newOrigin = [-0.070+0.012,-0.5+0.017,0.464,0,0,0] #In Jaco base frame. JtoR
             self.jacoToRhino = [self.newOrigin[0],self.newOrigin[1],self.newOrigin[2]]
 
-            self.offset = [-0.102,0,0.105] # Geometrical distance between gripper and extruder. In Extruder frame.
+            self.offsetVertical = [-0.106,0,0.100] # Geometrical distance between gripper and extruder. In Extruder frame. Use this when the extruder is pointing downward (0,0,0,1)
+            self.offsetHorizontal = [-0.116,0,0.108] # Geometrical distance between gripper and extruder. In Extruder frame. Use this when the extruder is horizontal (0.707,0,0,707,0)
 
 
             ##Target pose for commanding the robot
@@ -64,6 +65,7 @@ class jaco2moveit():
             self.touchPlatformFlag = False #True if "TouchPlatform" message is received
             self.extruderTemperature = 0 #Temperature of extruder
             self.extruderDesiredTemperature = 270 #Desired temperature of extruder
+            self.autoAngleValue = "zero" #Platform rotation angle when robot takes control of platform
 
             self.rospack = rospkg.RosPack()
             self.packagePath = self.rospack.get_path('jaco_printing') #Get directory path to jaco_printing package
@@ -76,8 +78,10 @@ class jaco2moveit():
             self.sub_jointState = rospy.Subscriber('/j2s7s300_driver/out/joint_state', JointState, self.jointstatecallback)
             #Topic for getting response from Arduino
             rospy.Subscriber('/chatter',String, self.getArduinoResponse)
+
             #Topic for getting commands from RhinoPlugin
             rospy.Subscriber('/command',String, self.getRhinoCommands)
+
             #Topic for getting joint torques
             #rospy.Subscriber('/j2s7s300_driver/out/joint_torques', JointAngles,self.monitorJointTorques)
             #Topic for getting cartesian force on end effector
@@ -246,9 +250,10 @@ class jaco2moveit():
             # If Human has touched the platform get the robot back to home
             # position
             print "user touched platform"
+            self.rhinoPub.publish('Touched')
             wpose = geometry_msgs.msg.Pose()
             self.waypoints = [] # Clean waypoints list
-            position = [0.3,0,0.1]
+            position = [0.2,0,0.2]
             orientation = [0,0,0,1]
             ##Convert poses to Robot's frame
             JtoG = self.RhinoToJacoTransformation(position, orientation)
@@ -263,16 +268,48 @@ class jaco2moveit():
             wpose.orientation.w = orientation[3]
             self.waypoints.append(copy.deepcopy(wpose))
 
-            plan = self.planTrajectory(1,-1, 0)  # Use pose move interface
+            plan = self.planTrajectory(0.5,-1, 0)  # Use pose move interface
             self.moveTrajectory(plan,-1)
             self.arduinoPub.publish("M18") # Disable platform motor
+            self.rhinoPub.publish('RotationEnabled')
         elif message.data == "TouchPlatform  0.00":
             self.touchPlatformFlag = False
+            wpose = geometry_msgs.msg.Pose()
+            self.waypoints = [] # Clean waypoints list
+            position = [0,0,0.15]
+            orientation = [0,0,0,1]
+            ##Convert poses to Robot's frame
+            JtoG = self.RhinoToJacoTransformation(position, orientation)
+            position = homogeneous.translation_from_matrix(JtoG)
+            orientation = homogeneous.quaternion_from_matrix(JtoG)
+            wpose.position.x = position[0]
+            wpose.position.y = position[1]
+            wpose.position.z = position[2]
+            wpose.orientation.x = orientation[0]
+            wpose.orientation.y = orientation[1]
+            wpose.orientation.z = orientation[2]
+            wpose.orientation.w = orientation[3]
+            self.waypoints.append(copy.deepcopy(wpose))
+
+            plan = self.planTrajectory(0.5,-1, 0)  # Use pose move interface
+            self.moveTrajectory(plan,-1)
+
 
         # Send angle of platform to RhinoPlugin
         fields = message.data.split(':')
-        if fields[0] == 'Angle':
+        if fields[0] == 'AutoAngle':
             self.rhinoPub.publish('Rot: ' + fields[1])
+
+        # Send autoAngle to RhinoPlugin only when the previous value is same as current value
+        fields = message.data.split(':')
+        if fields[0] == 'Angle':
+            if self.autoAngleValue != fields[1]:
+                self.autoAngleValue = fields[1]
+                rospy.sleep(0.1)
+                self.arduinoPub.publish("M16")
+            else:
+                self.rhinoPub.publish('Rot: ' + fields[1])
+
 
 
 
@@ -522,51 +559,56 @@ class jaco2moveit():
         self.JtoR = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.jacoToRhino), homogeneous.euler_matrix(0,0,np.pi/2,'rxyz'))
         print 'JtoR='
         print self.JtoR
-        self.EtoG = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.offset), homogeneous.euler_matrix(0,-np.pi/2,0,'rxyz'))
-        print 'EtoG='
-        print self.EtoG
+        self.EtoG_V = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.offsetVertical), homogeneous.euler_matrix(0,-np.pi/2,0,'rxyz'))
+        self.EtoG_H = homogeneous.concatenate_matrices(homogeneous.translation_matrix(self.offsetHorizontal), homogeneous.euler_matrix(0,-np.pi/2,0,'rxyz'))
+        print 'EtoG_Vertical='
+        print self.EtoG_V
+        print 'EtoG_Horizontal='
+        print self.EtoG_H
 
     # Get position and quaternions from RhinoPlugin and convert them to position and Quaternions for Robot End Effector
     def RhinoToJacoTransformation(self,positionRhino,quaternionRhino):
         #homogeneous transformation from Rhino to Extruder
         RtoE = homogeneous.concatenate_matrices(homogeneous.translation_matrix(positionRhino),homogeneous.quaternion_matrix(quaternionRhino))
-        #print 'RtoE='
-        #print RtoE
+        # print 'RtoE='
+        # print RtoE
 
-        #Premultiply with Jaco to Rhino and Postmultiply with Extruder to Gripper
-        JtoG = homogeneous.concatenate_matrices(self.JtoR, RtoE, self.EtoG)
-        #print 'JtoG='
-        #print JtoG
-        #Convert homogeneous matrix to Quaternions and Positions
+        # Premultiply with Jaco to Rhino and Postmultiply with Extruder to Gripper.
+        if quaternionRhino[0] < 0.5:
+            JtoG = homogeneous.concatenate_matrices(self.JtoR, RtoE, self.EtoG_V)
+        else:
+            JtoG = homogeneous.concatenate_matrices(self.JtoR, RtoE, self.EtoG_H)
+        # print 'JtoG='
+        # print JtoG
+        #Parking Motion.\r Convert homogeneous matrix to Quaternions and Positions
         return JtoG
 
-
-    #This function is used to control Jaco and Extruder when testing using a text file.
-    #Send the target position to moveitTrajectoryPlanner.
-    #The fields of text file are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
+    # This function is used to control Jaco and Extruder when testing using a text file.
+    # Send the target position to moveitTrajectoryPlanner.
+    # The fields of text file are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,Pause,Speed,TypeOfCurve)
     def commandJacoTextFile(self):
         file = open(self.packagePath+'/scripts/sample_points.txt')
         line = file.readline()
-        #print line
+        # print line
         while line and not rospy.is_shutdown():
             line = line.strip()
             fields = line.split(',')
             if len(fields) == 13:
-                #print fields
+                # print fields
                 position = [-1*float(fields[1])/1000, -1*float(fields[2])/1000, -1*float(fields[3])/1000]
-                orientation = [float(fields[4]),float(fields[5]),float(fields[6]),float(fields[7])]
-                pause = int (fields[10])
+                orientation = [float(fields[4]), float(fields[5]), float(fields[6]), float(fields[7])]
+                pause = int(fields[10])
                 typeOfCurve = int(fields[10])
                 MaxTranslationVelocity = float(fields[11])
                 MaxRotationalVelocity = float(fields[11])
                 velocity_scaling_factor = MaxTranslationVelocity/self.MaxTranslationVelocity
 
-                ##Convert poses to Robot's frame
-                JtoG = self.RhinoToJacoTransformation(position,orientation)
-                position =  homogeneous.translation_from_matrix(JtoG)
+                # Convert poses to Robot's frame
+                JtoG = self.RhinoToJacoTransformation(position, orientation)
+                position = homogeneous.translation_from_matrix(JtoG)
                 orientation = homogeneous.quaternion_from_matrix(JtoG)
 
-                ##Add pose to waypoints
+                # Add pose to waypoints
                 wpose = geometry_msgs.msg.Pose()
                 wpose.position.x = position[0]
                 wpose.position.y = position[1]
@@ -576,7 +618,7 @@ class jaco2moveit():
                 wpose.orientation.z = orientation[2]
                 wpose.orientation.w = orientation[3]
                 self.waypoints.append(copy.deepcopy(wpose))
-                #self.moveToPose(wpose) ## Use pose move interface
+                # self.moveToPose(wpose) ## Use pose move interface
 
                 # Send cooling commands to arduino
                 if int(fields[9]) == 1:
@@ -584,53 +626,119 @@ class jaco2moveit():
                 else:
                     self.arduinoPub.publish("M106 S0")
 
-                ## Move arm when pause is not zero
+                # Move arm when pause is not zero
                 if pause != 0:
                     plan = self.planTrajectory(velocity_scaling_factor, typeOfCurve, float(fields[8]))
-                    #self.moveTrajectory(plan,typeOfCurve)
+                    self.moveTrajectory(plan, typeOfCurve)
 
                 # Send extruder commands to arduino
                 self.arduinoPub.publish("G1 E"+fields[8])
 
-                #Pause robot
+                # Pause robot
                 print "Pausing for"
-                print rospy.Duration(pause,0)
+                print rospy.Duration(pause, 0)
                 if not rospy.is_shutdown():
-                    rospy.sleep(rospy.Duration(pause,0))
+                    rospy.sleep(rospy.Duration(pause, 0))
                 if rospy.is_shutdown():
                     print 'Goodbye!'
             line = file.readline()
         file.close()
 
-    #This callback function is used to control Jaco and Extruder when Rhino Plugin in connected.
-    #Send the target position to add_pose_to_Cartesian_trajectory. The fields of 'message' are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,TypeOfCurve,Pause,Speed)
+    # This callback function is used to control Jaco and Extruder when Rhino Plugin in connected.
+    # Send the target position to add_pose_to_Cartesian_trajectory. The fields of 'message' are: (0,X,Y,Z,Rx,Ry,Rz,Rw,Extrusion,Cooling,TypeOfCurve,Pause,Speed)
     def getRhinoCommands(self, message):
         self.startArmClient()
         if message.data[:4] == "M117":
             # Send platform rotation command to Arduino
             self.arduinoPub.publish(message)
+            # Ask rotation angle from arduino
+            self.arduinoPub.publish("M16")
 
         self.receivedCounter = self.receivedCounter+1
-        print 'Received Counter:%i'%self.receivedCounter
+        print 'Received Counter:%i' % self.receivedCounter
         fields = message.data.split(',')
+        print message.data
+
+        if message.data == "1,":
+            # If Human moves away from the platform get the robot back to home
+            # position and
+            print "user moved away from the platform"
+            wpose = geometry_msgs.msg.Pose()
+            self.waypoints = []  # Clean waypoints list
+            position = [0.3, 0, 0.3]
+            orientation = [0, 0, 0, 1]
+            # Convert poses to Robot's frame
+            JtoG = self.RhinoToJacoTransformation(position, orientation)
+            position = homogeneous.translation_from_matrix(JtoG)
+            orientation = homogeneous.quaternion_from_matrix(JtoG)
+            wpose.position.x = position[0]
+            wpose.position.y = position[1]
+            wpose.position.z = position[2]
+            wpose.orientation.x = orientation[0]
+            wpose.orientation.y = orientation[1]
+            wpose.orientation.z = orientation[2]
+            wpose.orientation.w = orientation[3]
+            self.waypoints.append(copy.deepcopy(wpose))
+
+            plan = self.planTrajectory(0.5, -1, 0)  # Use pose move interface
+            self.moveTrajectory(plan, -1)
+
+            # Send reponse to Rhino
+            self.rhinoPub.publish('Parking Motion.\r')
+
+        if message.data == "reset":
+            # If we press the 'Reset' button in Rhino Plugin the robot should
+            # go to partking position and rotation angle should be reset to 0
+
+            # Send reset angle command to arduino and Rhino
+            self.arduinoPub.publish('M15')
+            self.rhinoPub.publish('Rot: ' + str(0))
+
+            # Move robot to parking position
+            wpose = geometry_msgs.msg.Pose()
+            self.waypoints = []  # Clean waypoints list
+            position = [0.3, 0, 0.15]  # Parking position
+            orientation = [0, 0, 0, 1]
+
+            # Convert poses to Robot's frame
+            JtoG = self.RhinoToJacoTransformation(position, orientation)
+            position = homogeneous.translation_from_matrix(JtoG)
+            orientation = homogeneous.quaternion_from_matrix(JtoG)
+            wpose.position.x = position[0]
+            wpose.position.y = position[1]
+            wpose.position.z = position[2]
+            wpose.orientation.x = orientation[0]
+            wpose.orientation.y = orientation[1]
+            wpose.orientation.z = orientation[2]
+            wpose.orientation.w = orientation[3]
+            self.waypoints.append(copy.deepcopy(wpose))
+
+            plan = self.planTrajectory(0.5, -1, 0)  # Use pose move interface
+            self.moveTrajectory(plan, -1)
+
+
+            # Send response to Rhino
+            self.rhinoPub.publish('Reset Done.\r')
+
+
         if len(fields) == 13:
             # print fields
             position = [float(fields[1])/1000, float(fields[2])/1000, float(fields[3])/1000]
-            orientation = [float(fields[4]),float(fields[5]),float(fields[6]),float(fields[7])]
+            orientation = [float(fields[4]), float(fields[5]), float(fields[6]), float(fields[7])]
             typeOfCurve = int(fields[10])
-            pause = int (fields[11])
+            pause = int(fields[11])
             MaxTranslationVelocity = float(fields[12])
             MaxRotationalVelocity = float(fields[12])
             velocity_scaling_factor = MaxTranslationVelocity/self.MaxTranslationVelocity
             print "Velocity factor :"
             print velocity_scaling_factor
 
-            ##Convert poses to Robot's frame
-            JtoG = self.RhinoToJacoTransformation(position,orientation)
-            position =  homogeneous.translation_from_matrix(JtoG)
+            # Convert poses to Robot's frame
+            JtoG = self.RhinoToJacoTransformation(position, orientation)
+            position = homogeneous.translation_from_matrix(JtoG)
             orientation = homogeneous.quaternion_from_matrix(JtoG)
 
-            ##Add pose to waypoints
+            # Add pose to waypoints
             wpose = geometry_msgs.msg.Pose()
             wpose.position.x = position[0]
             wpose.position.y = position[1]
@@ -640,14 +748,14 @@ class jaco2moveit():
             wpose.orientation.z = orientation[2]
             wpose.orientation.w = orientation[3]
             self.waypoints.append(copy.deepcopy(wpose))
-            #self.moveToPose(wpose) ## Use pose move interface
+            # self.moveToPose(wpose) ## Use pose move interface
 
-            ## Extrude extra material at the beginning of a segment
+            # Extrude extra material at the beginning of a segment
             if typeOfCurve in (9, 11, 18):
                 self.arduinoPub.publish("G1 E12 T0.5")
                 rospy.sleep(0.5)
 
-            ## Move arm when pause is not zero
+            # Move arm when pause is not zero
             if pause != 0:
                 plan = self.planTrajectory(velocity_scaling_factor, typeOfCurve, float(fields[8]))
                 time = plan.joint_trajectory.points[-1].time_from_start.secs + plan.joint_trajectory.points[-1].time_from_start.nsecs/1000000000.0
@@ -656,8 +764,8 @@ class jaco2moveit():
                 if fields[8] is not "0.00" and time > 1:
                     self.arduinoPub.publish("G1 E"+fields[8]+" T"+str(time))
                 rospy.sleep(0.3)
-                #Move Arm
-                self.moveTrajectory(plan,typeOfCurve)
+                # Move Arm
+                self.moveTrajectory(plan, typeOfCurve)
 
                 # Send cooling commands to arduino
                 if int(fields[9]) == 1:
@@ -665,12 +773,11 @@ class jaco2moveit():
                 else:
                     self.arduinoPub.publish("M106 S0")
 
-
-                #Pause robot
+                # Pause robot
                 print "Pausing for"
-                print rospy.Duration(pause,0)
+                print rospy.Duration(pause, 0)
                 if not rospy.is_shutdown():
-                    rospy.sleep(rospy.Duration(pause,0))
+                    rospy.sleep(rospy.Duration(pause, 0))
                 if rospy.is_shutdown():
                     print 'Goodbye!'
 
@@ -680,23 +787,19 @@ class jaco2moveit():
             else:
                 self.arduinoPub.publish("M106 S0")
 
-
             while self.touchPlatformFlag is True:
                 print 'Waiting for user to release the platform'
                 rospy.sleep(0.1)
 
-
             # Send reponse to Rhino
             self.rhinoPub.publish('Motion.\r')
             self.sentCounter = self.sentCounter+1
-            print 'Sent Counter:%i'%self.sentCounter
+            print 'Sent Counter:%i' % self.sentCounter
 
 
-
-
-if __name__=='__main__':
-    #Initialize node
-    rospy.init_node('jaco2moveit',anonymous=True)
+if __name__ == '__main__':
+    # Initialize node
+    rospy.init_node('jaco2moveit', anonymous=True)
 
     try:
         brain = jaco2moveit()
