@@ -100,39 +100,41 @@ Terminal 3: roslaunch jaco_printing jaco2moveit.launch
 ### Ubuntu Laptop (ROS):
 ```
 Terminal 1 (Kinova Driver):
-export ROS_MASTER_URI=http://192.168.1.2:11311
-export ROS_IP=192.168.1.2
+export ROS_MASTER_URI=http://192.168.1.3:11311
+export ROS_IP=192.168.1.3
 cd catkin_ws_kinova
 source devel/setup.bash
 roslaunch kinova_bringup kinova_robot.launch kinova_robotType:=j2s7s300
 
 Terminal 2 (Arduino Connection):
-export ROS_IP=192.168.1.2
+export ROS_IP=192.168.1.3
 cd catkin_ws_kinova
 source devel/setup.bash
-rosrun rosserial_python serial_node.py _port:=/dev/ttyACM1 _baud:=115200
+rosrun rosserial_python serial_node.py _port:=/dev/ttyACM0 _baud:=115200
 
 Terminal 3 (MoveIt):
 cd catkin_ws_kinova
 source devel/setup.bash
-export ROS_IP=192.168.1.2
+export ROS_IP=192.168.1.3
 roslaunch j2s7s300_moveit_config j2s7s300_demo.launch
 
 Terminal 4 (Move Jaco using MoveIt):
 cd catkin_ws_kinova
 source devel/setup.bash
-export ROS_IP=192.168.1.2
+export ROS_IP=192.168.1.3
 roslaunch jaco_printing jaco2moveit.launch
 
 Terminal 5 (Joint torque feedback):
 cd catkin_ws_kinova
 source devel/setup.bash
-export ROS_IP=192.168.1.2
+export ROS_IP=192.168.1.3
 rosrun jaco_printing jaco2moveit_node2.py
 
 Terminal 6 (for testing):
-export ROS_IP=192.168.1.2
-rostopic pub /command std_msgs/String '0,0,0,150,0,0,0,1,1,0,9,1,80'
+export ROS_IP=192.168.1.3
+cd catkin_ws_kinova
+source devel/setup.bash
+rostopic pub /command std_msgs/String '0,0,0,150,0,0,0,1,0,0,2,1,80'
 rostopic pub /command std_msgs/String '0,100,0,-150,0.6483,0,0.7614,0,1,0,9,1,80'
 rostopic pub /command std_msgs/String '0,0,0,150,0,0,0,1,1,0,9,1,80'
 rostopic pub /extruder std_msgs/String "G1 E10 T2"
